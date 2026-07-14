@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # No `services:` block on purpose. The suite boots a real PostgreSQL 15 via
+    # embedded-postgres, and sessions live in Postgres rather than Redis, so
+    # neither needs a container here.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Test
+        run: npm test
+
+      - name: Verify schema and migrations have not drifted
+        # The init migration has hand-appended SQL (the CHECK constraint), so
+        # schema.prisma and migrations/ can silently diverge without this.
+        run: |
+          npx prisma migrate diff \
+            --from-migrations packages/db/prisma/migrations \
+            --to-schema-datamodel packages/db/prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" \
+            --exit-code
+        env:
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shadow
+        # Needs a live Postgres for the shadow database; the suite's embedded
+        # instance is gone by now. Enable once a CI Postgres service exists.
+        continue-on-error: true

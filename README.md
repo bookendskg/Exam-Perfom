@@ -1,65 +1,101 @@
-# Exam-Perfom
+# Bookends Hospitality — Staff Performance & Examination Portal
 
-An exam and performance management portal for certification and training bodies — delivering exams to candidates, scoring them, and keeping the certification records that come out the other side.
+A staff performance management platform for Bookends Hospitality's restaurant outlets in Gujarat, India — **Aiko** (Japanese/Asian), **Capiche** (Italian), and **Prep** — covering roughly 300 employees.
 
-> **Status: early.** The repository is currently a scaffold. This README describes the intended shape of the project; sections marked _planned_ are not built yet.
+It is not only an exam portal. Monthly examinations are the input; the product is the performance record that comes out — individual growth over time, outlet and department comparisons, targeted training for people who are struggling, and recognition for people who aren't.
 
-## What it's for
+> **Status: early.** The database foundation is built and verified. The API is in progress. Sections marked _planned_ are not built yet.
 
-Certification bodies run the same loop over and over: publish an exam, get candidates through it under supervision, score it consistently, and issue a record that someone downstream will need to verify. This portal aims to hold that whole loop in one place instead of spreading it across spreadsheets, a proctoring vendor, and a certificate mail-merge.
+## What it does
+
+- **Monthly exams, scheduled automatically** on the 15th, shifting to the next Monday when the 15th lands on a weekend
+- **Three question types** — multiple choice (auto-graded), theory (manually graded), and video/image responses graded against a rubric
+- **Trilingual throughout** — every staff-facing string exists in English, Hindi, and Gujarati, falling back Gujarati → Hindi → English
+- **Performance tracking** — monthly snapshots, topic-level breakdowns, outlet/department/overall ranking, month-over-month deltas
+- **Training recommendations** driven by weak topic scores
+- **Certificates, rewards, and leaderboards**
+- Staff take exams on an **Android app**; management uses a **web admin panel**
 
 ## Roles
 
-| Role | Can do |
-| --- | --- |
-| Candidate | Register, sit scheduled exams, view results and earned certifications |
-| Examiner | Author exams and question banks, supervise sittings, review and score submissions |
-| Admin | Manage users, exam schedules, scoring rules, and certification records |
+Six roles with scoped permissions (see §3.2 of the spec for the full matrix):
 
-## Planned features
+| Role           | Scope                                                                     |
+| -------------- | ------------------------------------------------------------------------- |
+| Super Admin    | Everything, including role management and audit logs                      |
+| Admin          | Everything except role management — the operations team                   |
+| Outlet Manager | Their own outlet's employees, questions, exams, and reports               |
+| Trainer        | Authors questions (edits only their own), grades theory and video answers |
+| HR             | Employee records and reports across all outlets                           |
+| Staff          | Takes exams, views only their own results and performance                 |
 
-- **Exam authoring** — question banks, multiple question types, versioned exam papers
-- **Scheduling** — exam windows, candidate enrolment, seat allocation
-- **Delivery** — timed sittings with autosave, resume-after-disconnect
-- **Proctoring** — session monitoring and integrity flags for examiner review
-- **Scoring** — automatic marking where possible, examiner review queue for the rest
-- **Certification records** — issued credentials with expiry and third-party verification
-- **Reporting** — candidate performance over time, pass rates, question-level analytics
+Permissions are not a flat role check — many are scoped to "own outlet" or "own resource", enforced at the data layer rather than the route.
 
 ## Tech stack
 
-- **Frontend:** React
-- **Backend:** Node.js
-- **Database:** TBD
+| Layer     | Choice                                                      |
+| --------- | ----------------------------------------------------------- |
+| API       | Node.js 22+, Express 5, TypeScript (ESM)                    |
+| Database  | PostgreSQL 15+ via Prisma                                   |
+| Auth      | JWT access tokens (15 min) + opaque refresh tokens (7 days) |
+| Admin web | React 18 + Tailwind + shadcn/ui — _planned_                 |
+| Staff app | Android APK — _planned_                                     |
+| Queue     | BullMQ + Redis — _planned, arrives with auto-scheduling_    |
+
+## Repository layout
+
+```
+packages/core/   @bookends/core — pure logic, zero I/O. Password hashing,
+                 the RBAC permission matrix, API envelope types.
+packages/db/     @bookends/db — Prisma schema, migrations, seed data.
+apps/api/        @bookends/api — the Express API.
+```
+
+`packages/core` has no dependencies on the other two on purpose: the seed in `packages/db` must produce a password hash the API can verify, so the hasher cannot live in `apps/api` without creating a dependency cycle.
 
 ## Getting started
 
 ### Prerequisites
 
-- Node.js (LTS)
-- npm
+- Node.js 22+ (see `.nvmrc`)
+- A PostgreSQL 15+ instance
+
+There is no `docker-compose.yml` — point `DATABASE_URL` at any Postgres you have. The test suite does not need one: it downloads and runs a real PostgreSQL 15 binary via `embedded-postgres`.
 
 ### Setup
 
 ```bash
-git clone <repository-url>
-cd Exam-Perfom
 npm install
+cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
+npm run db:migrate
+npm run db:seed           # loads outlets, departments, designations
+npm run build
 ```
 
-### Running locally
+### Running
 
 ```bash
-npm run dev
+npm run dev               # API
+npm test                  # full suite — no Docker, no Redis required
+npm run lint
 ```
 
-Copy `.env.example` to `.env` and fill in the required values before first run.
+### Seeding a first admin
 
-> Setup steps above are the intended standard flow — the scripts and `.env.example` land with the initial application code.
+The seed creates a super admin only when both variables are set:
 
-## Project structure
+```bash
+SEED_ADMIN_PHONE=9876543210 SEED_ADMIN_PASSWORD='...' npm run db:seed
+```
 
-_To be documented once the application scaffold is in place._
+The account is created with `must_change_password = true`, so the first login forces a password change.
+
+## Project conventions
+
+- **Feature-first, not layered.** A module's routes, schemas, service, and tests live together under `apps/api/src/<feature>/`, rather than being scattered across global `routes/`, `controllers/`, and `services/` directories.
+- **`app.ts` builds; `main.ts` listens.** `buildApp(deps)` never binds a port, so tests drive the real middleware chain over supertest.
+- **Trilingual columns** follow `<field>_en` (required) / `<field>_hi` / `<field>_gu` (both nullable). Language fallback happens in the API layer, never in the database.
+- **Tests run against real PostgreSQL**, not a mock. The schema leans on `INET`, `JSONB`, `TEXT[]`, partial indexes, and CHECK constraints; anything less would be testing a different database than production.
 
 ## Contributing
 

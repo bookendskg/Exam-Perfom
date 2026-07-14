@@ -1,0 +1,1119 @@
+// Bookends Hospitality — Staff Performance & Examination Portal
+// Data model per Master Development Prompt v1.0 §4.
+//
+// Trilingual convention (§6.2): every staff-facing text field is stored as a
+// triple — `<field>En` is NOT NULL, `<field>Hi` and `<field>Gu` are nullable.
+// Resolution falls back gu -> hi -> en at the API layer, never in the database.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  super_admin
+  admin
+  outlet_manager
+  trainer
+  hr
+  staff
+}
+
+enum Language {
+  en
+  hi
+  gu
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum EmploymentType {
+  full_time
+  part_time
+  contract
+  trainee
+}
+
+enum EmploymentStatus {
+  active
+  on_leave
+  suspended
+  terminated
+  resigned
+}
+
+enum TimelineEventType {
+  joined
+  training
+  exam
+  promotion
+  warning
+  award
+  transfer
+  remark
+  suspension
+  resignation
+  termination
+}
+
+enum SourceDocumentType {
+  cookbook
+  sop
+  training_manual
+  recipe
+  service_manual
+  hygiene_guide
+  other
+}
+
+enum QuestionType {
+  mcq
+  theory
+  video_image
+}
+
+enum Difficulty {
+  easy
+  medium
+  hard
+}
+
+/// What a video_image question expects the candidate to upload.
+enum ExpectedResponseType {
+  image
+  video
+  both
+}
+
+enum QuestionStatus {
+  draft
+  pending_review
+  approved
+  archived
+}
+
+enum ReviewAction {
+  approved
+  rejected
+  revision_requested
+}
+
+enum ExamStatus {
+  draft
+  scheduled
+  active
+  completed
+  cancelled
+  archived
+}
+
+enum AssignmentStatus {
+  assigned
+  notified
+  started
+  submitted
+  graded
+  absent
+  exempted
+}
+
+enum ScheduleFallbackRule {
+  next_monday
+  previous_friday
+  next_weekday
+}
+
+/// What the candidate actually uploaded for a video_image response.
+enum MediaType {
+  image
+  video
+}
+
+enum CertificateType {
+  monthly
+  quarterly
+  yearly
+  special
+  training_completion
+}
+
+enum RewardType {
+  gold
+  silver
+  bronze
+  employee_of_month
+  special
+}
+
+enum TrainingStatus {
+  assigned
+  in_progress
+  completed
+  overdue
+}
+
+enum RemarkType {
+  positive
+  improvement
+  warning
+  general
+}
+
+enum NotificationType {
+  exam_scheduled
+  exam_reminder
+  exam_result
+  training_assigned
+  reward_earned
+  system
+}
+
+enum NotificationChannel {
+  in_app
+  push
+  whatsapp
+  email
+}
+
+enum WhatsAppStatus {
+  pending
+  sent
+  delivered
+  read
+  failed
+}
+
+// ---------------------------------------------------------------------------
+// Users & Employees (§4.1)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  phone        String    @unique @db.VarChar(15)
+  email        String?   @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         Role      @default(staff)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // §7.3 force password change on first login. Defaults true so that every
+  // creation path — seed, HR, bulk import — fails closed rather than silently
+  // leaving a derived-from-phone-number default in place.
+  mustChangePassword Boolean   @default(true) @map("must_change_password")
+  passwordChangedAt  DateTime? @map("password_changed_at") @db.Timestamptz(6)
+
+  // §5.3 forgot/reset. Stored as sha256 hex, never raw — a leaked database must
+  // not hand over working reset links.
+  passwordResetTokenHash String?   @unique @map("password_reset_token_hash") @db.Char(64)
+  passwordResetExpiresAt DateTime? @map("password_reset_expires_at") @db.Timestamptz(6)
+
+  // NOTE: §4.1's `refresh_token TEXT` column was dropped here. §7.5 requires
+  // multiple concurrent sessions for admin roles, each with its own device info
+  // and idle expiry — one column cannot hold that. See UserSession.
+
+  employee            Employee?            @relation("EmployeeAccount")
+  employeesCreated    Employee[]           @relation("EmployeeCreatedBy")
+  skillsAssessed      EmployeeSkill[]      @relation("SkillAssessedBy")
+  timelineCreated     EmployeeTimeline[]   @relation("TimelineCreatedBy")
+  outletsManaged      Outlet[]             @relation("OutletManager")
+  documentsUploaded   SourceDocument[]     @relation("DocumentUploadedBy")
+  questionsCreated    Question[]           @relation("QuestionCreatedBy")
+  questionsApproved   Question[]           @relation("QuestionApprovedBy")
+  questionReviews     QuestionReview[]     @relation("QuestionReviewer")
+  templatesCreated    ExamTemplate[]       @relation("TemplateCreatedBy")
+  examsCreated        Exam[]               @relation("ExamCreatedBy")
+  assignmentsGraded   ExamAssignment[]     @relation("AssignmentGradedBy")
+  responsesGraded     ExamResponse[]       @relation("ResponseGradedBy")
+  certificatesIssued  Certificate[]        @relation("CertificateIssuedBy")
+  rewardsAwarded      Reward[]             @relation("RewardAwardedBy")
+  trainingAssigned    TrainingAssignment[] @relation("TrainingAssignedBy")
+  remarksCreated      SupervisorRemark[]   @relation("RemarkCreatedBy")
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  settingsUpdated     Setting[]            @relation("SettingUpdatedBy")
+  sessions            UserSession[]
+
+  @@map("users")
+}
+
+/// Authentication sessions, per §7.5.
+///
+/// Named UserSession because ExamSession already exists and is unrelated (it
+/// tracks proctoring during an exam attempt).
+///
+/// The refresh token is an opaque 256-bit random string, not a JWT — nothing
+/// reads claims out of it, it is looked up. Stored as sha256 hex: the input is
+/// already high-entropy, so a fast hash is correct here and argon2 would be
+/// pure latency.
+model UserSession {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  refreshTokenHash String @unique @map("refresh_token_hash") @db.Char(64)
+  /// Previous hash, honoured for 60s after rotation so a mobile client that
+  /// fires two refreshes at once does not log itself out.
+  previousTokenHash String?   @map("previous_token_hash") @db.Char(64)
+  rotatedAt         DateTime? @map("rotated_at") @db.Timestamptz(6)
+
+  /// { model, os_version, app_version } — §7.5 "session tracking with device info"
+  deviceInfo Json?   @map("device_info")
+  ipAddress  String? @map("ip_address") @db.Inet
+  userAgent  String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Idle clock (§7.5). Throttled — only written when older than ~60s, so an
+  /// active exam-taker does not generate a row write per request.
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  /// logout | superseded | password_change | password_reset | admin_revoke
+  revokedReason String?   @map("revoked_reason") @db.VarChar(50)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([previousTokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model Employee {
+  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String  @unique @map("user_id") @db.Uuid
+  /// BK-{OUTLET_CODE}-{SEQ} per §8.2. Never reused, even after departure.
+  employeeCode String? @unique @map("employee_code") @db.VarChar(20)
+  firstName    String  @map("first_name") @db.VarChar(100)
+  lastName     String  @map("last_name") @db.VarChar(100)
+  photoUrl     String? @map("photo_url")
+  phone        String  @db.VarChar(15)
+  email        String? @db.VarChar(255)
+  dateOfBirth  DateTime? @map("date_of_birth") @db.Date
+  gender       Gender?
+  address      String?
+  city         String? @db.VarChar(100)
+  state        String? @db.VarChar(100)
+
+  // Employment details
+  outletId         String           @map("outlet_id") @db.Uuid
+  departmentId     String           @map("department_id") @db.Uuid
+  designationId    String           @map("designation_id") @db.Uuid
+  joiningDate      DateTime         @map("joining_date") @db.Date
+  employmentType   EmploymentType   @default(full_time) @map("employment_type")
+  employmentStatus EmploymentStatus @default(active) @map("employment_status")
+
+  preferredLanguage Language @default(en) @map("preferred_language")
+
+  emergencyContactName     String? @map("emergency_contact_name") @db.VarChar(200)
+  emergencyContactPhone    String? @map("emergency_contact_phone") @db.VarChar(15)
+  emergencyContactRelation String? @map("emergency_contact_relation") @db.VarChar(50)
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdById String?  @map("created_by") @db.Uuid
+
+  user        User        @relation("EmployeeAccount", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy   User?       @relation("EmployeeCreatedBy", fields: [createdById], references: [id])
+  outlet      Outlet      @relation(fields: [outletId], references: [id])
+  department  Department  @relation(fields: [departmentId], references: [id])
+  designation Designation @relation(fields: [designationId], references: [id])
+
+  skills               EmployeeSkill[]
+  timeline             EmployeeTimeline[]
+  examAssignments      ExamAssignment[]
+  performanceSnapshots PerformanceSnapshot[]
+  certificates         Certificate[]
+  rewards              Reward[]
+  trainingAssignments  TrainingAssignment[]
+  supervisorRemarks    SupervisorRemark[]
+
+  @@index([outletId])
+  @@index([departmentId])
+  @@index([userId])
+  @@map("employees")
+}
+
+model EmployeeSkill {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId    String   @map("employee_id") @db.Uuid
+  skillName     String   @map("skill_name") @db.VarChar(100)
+  skillCategory String?  @map("skill_category") @db.VarChar(50)
+  /// 1..5, enforced by a CHECK constraint added in migration.
+  proficiencyLevel Int   @map("proficiency_level") @db.SmallInt
+  assessedById  String?  @map("assessed_by") @db.Uuid
+  assessedAt    DateTime @default(now()) @map("assessed_at") @db.Timestamptz(6)
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assessedBy User?    @relation("SkillAssessedBy", fields: [assessedById], references: [id])
+
+  @@index([employeeId])
+  @@map("employee_skills")
+}
+
+model EmployeeTimeline {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId  String            @map("employee_id") @db.Uuid
+  eventType   TimelineEventType @map("event_type")
+  eventDate   DateTime          @default(now()) @map("event_date") @db.Timestamptz(6)
+  title       String            @db.VarChar(255)
+  description String?
+  metadata    Json?
+  createdById String?           @map("created_by") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("TimelineCreatedBy", fields: [createdById], references: [id])
+
+  @@index([employeeId, eventDate])
+  @@map("employee_timeline")
+}
+
+// ---------------------------------------------------------------------------
+// Outlets, Departments & Designations (§4.1, §9)
+// ---------------------------------------------------------------------------
+
+model Outlet {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(10)
+
+  /// High-water mark for employee codes at this outlet (§8.2).
+  ///
+  /// A counter, not MAX(employee_code)+1: §8.2 requires codes are never reused
+  /// "even after employee departure", and MAX+1 would re-issue the code of a
+  /// deleted employee. Incremented via UPDATE .. RETURNING, which takes a row
+  /// lock and so serialises concurrent hires at the same outlet.
+  lastEmployeeSeq Int @default(0) @map("last_employee_seq")
+  address   String?
+  city      String?  @db.VarChar(100)
+  state     String?  @db.VarChar(100)
+  phone     String?  @db.VarChar(15)
+  email     String?  @db.VarChar(255)
+  managerId String?  @map("manager_id") @db.Uuid
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  manager User? @relation("OutletManager", fields: [managerId], references: [id])
+
+  employees       Employee[]
+  departments     OutletDepartment[]
+  sourceDocuments SourceDocument[]
+  questions       Question[]
+  examTemplates   ExamTemplate[]
+  exams           Exam[]
+  scheduleConfigs ExamScheduleConfig[]
+
+  @@map("outlets")
+}
+
+model Department {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @db.VarChar(100)
+  code        String   @unique @db.VarChar(10)
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employees       Employee[]
+  designations    Designation[]
+  outlets         OutletDepartment[]
+  sourceDocuments SourceDocument[]
+  topics          Topic[]
+  questions       Question[]
+  examTemplates   ExamTemplate[]
+  exams           Exam[]
+
+  @@map("departments")
+}
+
+model Designation {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String   @db.VarChar(100)
+  code         String   @unique @db.VarChar(10)
+  departmentId String?  @map("department_id") @db.Uuid
+  /// Hierarchy level: 1 = entry, 5 = senior. Drives question targeting (§4.1).
+  level        Int      @default(1) @db.SmallInt
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  employees     Employee[]
+  examTemplates ExamTemplate[]
+  exams         Exam[]
+
+  @@map("designations")
+}
+
+model OutletDepartment {
+  outletId     String @map("outlet_id") @db.Uuid
+  departmentId String @map("department_id") @db.Uuid
+
+  outlet     Outlet     @relation(fields: [outletId], references: [id])
+  department Department @relation(fields: [departmentId], references: [id])
+
+  @@id([outletId, departmentId])
+  @@map("outlet_departments")
+}
+
+// ---------------------------------------------------------------------------
+// Question Bank (§4.1, §10)
+// ---------------------------------------------------------------------------
+
+model SourceDocument {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title        String             @db.VarChar(255)
+  type         SourceDocumentType
+  description  String?
+  fileUrl      String?            @map("file_url")
+  /// NULL = applies to all outlets.
+  outletId     String?            @map("outlet_id") @db.Uuid
+  departmentId String?            @map("department_id") @db.Uuid
+  version      String?            @default("1.0") @db.VarChar(20)
+  isActive     Boolean            @default(true) @map("is_active")
+  uploadedById String?            @map("uploaded_by") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  outlet     Outlet?     @relation(fields: [outletId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  uploadedBy User?       @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  topics              Topic[]
+  questions           Question[]
+  trainingAssignments TrainingAssignment[]
+
+  @@map("source_documents")
+}
+
+model Topic {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nameEn           String   @map("name_en") @db.VarChar(255)
+  nameHi           String?  @map("name_hi") @db.VarChar(255)
+  nameGu           String?  @map("name_gu") @db.VarChar(255)
+  sourceDocumentId String?  @map("source_document_id") @db.Uuid
+  parentTopicId    String?  @map("parent_topic_id") @db.Uuid
+  departmentId     String?  @map("department_id") @db.Uuid
+  sortOrder        Int?     @default(0) @map("sort_order") @db.SmallInt
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id])
+  parentTopic    Topic?          @relation("TopicTree", fields: [parentTopicId], references: [id])
+  subTopics      Topic[]         @relation("TopicTree")
+  department     Department?     @relation(fields: [departmentId], references: [id])
+
+  questions           Question[]
+  trainingAssignments TrainingAssignment[]
+
+  @@map("topics")
+}
+
+model Question {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // Classification
+  type                 QuestionType
+  difficulty           Difficulty   @default(medium)
+  topicId              String?      @map("topic_id") @db.Uuid
+  departmentId         String       @map("department_id") @db.Uuid
+  /// NULL = all outlets.
+  outletId             String?      @map("outlet_id") @db.Uuid
+  designationLevelMin  Int?         @default(1) @map("designation_level_min") @db.SmallInt
+  designationLevelMax  Int?         @default(5) @map("designation_level_max") @db.SmallInt
+
+  // Trilingual content
+  questionTextEn String  @map("question_text_en")
+  questionTextHi String? @map("question_text_hi")
+  questionTextGu String? @map("question_text_gu")
+
+  explanationEn String? @map("explanation_en")
+  explanationHi String? @map("explanation_hi")
+  explanationGu String? @map("explanation_gu")
+
+  instructionsEn String? @map("instructions_en")
+  instructionsHi String? @map("instructions_hi")
+  instructionsGu String? @map("instructions_gu")
+
+  // Media
+  imageUrl String? @map("image_url")
+  videoUrl String? @map("video_url")
+  audioUrl String? @map("audio_url")
+
+  // Scoring
+  marks            Decimal  @default(1.0) @db.Decimal(5, 2)
+  negativeMarks    Decimal? @default(0) @map("negative_marks") @db.Decimal(5, 2)
+  timeLimitSeconds Int?     @map("time_limit_seconds")
+
+  /// MCQ only: [{ id, text_en, text_hi, text_gu, is_correct, image_url }]
+  options Json?
+
+  // Theory only
+  expectedAnswerEn String? @map("expected_answer_en")
+  expectedAnswerHi String? @map("expected_answer_hi")
+  expectedAnswerGu String? @map("expected_answer_gu")
+  maxWordLimit     Int?    @map("max_word_limit")
+  minWordLimit     Int?    @map("min_word_limit")
+
+  // Video/image only
+  responseType            ExpectedResponseType? @map("response_type")
+  maxFileSizeMb           Int?                  @default(50) @map("max_file_size_mb")
+  maxVideoDurationSeconds Int?                  @default(120) @map("max_video_duration_seconds")
+  /// [{ criterion, max_marks, description }]
+  rubric                  Json?
+
+  // Status
+  status       QuestionStatus @default(draft)
+  approvedById String?        @map("approved_by") @db.Uuid
+  approvedAt   DateTime?      @map("approved_at") @db.Timestamptz(6)
+
+  // Source
+  sourceDocumentId String? @map("source_document_id") @db.Uuid
+  sourceChapter    String? @map("source_chapter") @db.VarChar(255)
+  sourcePage       String? @map("source_page") @db.VarChar(50)
+
+  tags String[]
+
+  /// Denormalised count of exams that have used this question.
+  usageCount  Int      @default(0) @map("usage_count")
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  topic          Topic?          @relation(fields: [topicId], references: [id])
+  department     Department      @relation(fields: [departmentId], references: [id])
+  outlet         Outlet?         @relation(fields: [outletId], references: [id])
+  approvedBy     User?           @relation("QuestionApprovedBy", fields: [approvedById], references: [id])
+  createdBy      User            @relation("QuestionCreatedBy", fields: [createdById], references: [id])
+  sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id])
+
+  reviews       QuestionReview[]
+  examQuestions ExamQuestion[]
+  examResponses ExamResponse[]
+
+  @@index([type, departmentId])
+  @@index([topicId])
+  @@index([difficulty])
+  @@map("questions")
+}
+
+model QuestionReview {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionId String       @map("question_id") @db.Uuid
+  reviewerId String       @map("reviewer_id") @db.Uuid
+  action     ReviewAction
+  comments   String?
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  reviewer User     @relation("QuestionReviewer", fields: [reviewerId], references: [id])
+
+  @@index([questionId])
+  @@map("question_reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Exam Builder & Scheduling (§4.1, §11, §12)
+// ---------------------------------------------------------------------------
+
+model ExamTemplate {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nameEn        String  @map("name_en") @db.VarChar(255)
+  nameHi        String? @map("name_hi") @db.VarChar(255)
+  nameGu        String? @map("name_gu") @db.VarChar(255)
+  descriptionEn String? @map("description_en")
+  descriptionHi String? @map("description_hi")
+  descriptionGu String? @map("description_gu")
+
+  // Target audience — NULL means "all".
+  outletId      String? @map("outlet_id") @db.Uuid
+  departmentId  String? @map("department_id") @db.Uuid
+  designationId String? @map("designation_id") @db.Uuid
+
+  // Structure
+  totalMarks         Decimal @map("total_marks") @db.Decimal(6, 2)
+  passingPercentage  Decimal @default(40.0) @map("passing_percentage") @db.Decimal(5, 2)
+  durationMinutes    Int     @default(60) @map("duration_minutes")
+
+  // Question distribution
+  mcqCount             Int?     @default(0) @map("mcq_count")
+  mcqMarksEach         Decimal? @default(1.0) @map("mcq_marks_each") @db.Decimal(5, 2)
+  theoryCount          Int?     @default(0) @map("theory_count")
+  theoryMarksEach      Decimal? @default(5.0) @map("theory_marks_each") @db.Decimal(5, 2)
+  videoImageCount      Int?     @default(0) @map("video_image_count")
+  videoImageMarksEach  Decimal? @default(10.0) @map("video_image_marks_each") @db.Decimal(5, 2)
+
+  /// Auto-selection rules per §11.2.
+  questionSelection Json? @map("question_selection")
+
+  // Settings
+  shuffleQuestions      Boolean? @default(true) @map("shuffle_questions")
+  shuffleOptions        Boolean? @default(true) @map("shuffle_options")
+  showResultImmediately Boolean? @default(false) @map("show_result_immediately")
+  allowReview           Boolean? @default(false) @map("allow_review")
+  allowBackNavigation   Boolean? @default(true) @map("allow_back_navigation")
+  showExplanationAfter  Boolean? @default(true) @map("show_explanation_after")
+
+  isActive    Boolean  @default(true) @map("is_active")
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  outlet      Outlet?      @relation(fields: [outletId], references: [id])
+  department  Department?  @relation(fields: [departmentId], references: [id])
+  designation Designation? @relation(fields: [designationId], references: [id])
+  createdBy   User         @relation("TemplateCreatedBy", fields: [createdById], references: [id])
+
+  exams           Exam[]
+  scheduleConfigs ExamScheduleConfig[]
+
+  @@map("exam_templates")
+}
+
+model Exam {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  templateId String? @map("template_id") @db.Uuid
+
+  nameEn String  @map("name_en") @db.VarChar(255)
+  nameHi String? @map("name_hi") @db.VarChar(255)
+  nameGu String? @map("name_gu") @db.VarChar(255)
+  /// Auto-generated: EX-2026-07-001.
+  examCode String @unique @map("exam_code") @db.VarChar(20)
+
+  // Schedule
+  scheduledDate DateTime @map("scheduled_date") @db.Date
+  startTime     DateTime @map("start_time") @db.Time(6)
+  endTime       DateTime @map("end_time") @db.Time(6)
+  timezone      String?  @default("Asia/Kolkata") @db.VarChar(50)
+
+  // Target
+  outletId      String? @map("outlet_id") @db.Uuid
+  departmentId  String? @map("department_id") @db.Uuid
+  designationId String? @map("designation_id") @db.Uuid
+
+  // Configuration — copied from template, overridable per §11.1.
+  totalMarks            Decimal  @map("total_marks") @db.Decimal(6, 2)
+  passingPercentage     Decimal  @default(40.0) @map("passing_percentage") @db.Decimal(5, 2)
+  durationMinutes       Int      @map("duration_minutes")
+  shuffleQuestions      Boolean? @default(true) @map("shuffle_questions")
+  shuffleOptions        Boolean? @default(true) @map("shuffle_options")
+  showResultImmediately Boolean? @default(false) @map("show_result_immediately")
+  allowReview           Boolean? @default(false) @map("allow_review")
+  allowBackNavigation   Boolean? @default(true) @map("allow_back_navigation")
+
+  status          ExamStatus @default(draft)
+  isAutoScheduled Boolean?   @default(false) @map("is_auto_scheduled")
+
+  // Denormalised stats
+  totalAssigned  Int?     @default(0) @map("total_assigned")
+  totalAttempted Int?     @default(0) @map("total_attempted")
+  totalPassed    Int?     @default(0) @map("total_passed")
+  averageScore   Decimal? @map("average_score") @db.Decimal(5, 2)
+
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  template    ExamTemplate? @relation(fields: [templateId], references: [id])
+  outlet      Outlet?       @relation(fields: [outletId], references: [id])
+  department  Department?   @relation(fields: [departmentId], references: [id])
+  designation Designation?  @relation(fields: [designationId], references: [id])
+  createdBy   User          @relation("ExamCreatedBy", fields: [createdById], references: [id])
+
+  examQuestions       ExamQuestion[]
+  assignments         ExamAssignment[]
+  certificates        Certificate[]
+  trainingTriggered   TrainingAssignment[] @relation("TrainingTriggeringExam")
+  supervisorRemarks   SupervisorRemark[]
+
+  @@index([scheduledDate])
+  @@index([outletId])
+  @@map("exams")
+}
+
+model ExamQuestion {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  examId      String  @map("exam_id") @db.Uuid
+  questionId  String  @map("question_id") @db.Uuid
+  sortOrder   Int     @map("sort_order") @db.SmallInt
+  /// Overrides the question's default marks for this exam.
+  marks       Decimal @db.Decimal(5, 2)
+  isMandatory Boolean @default(true) @map("is_mandatory")
+
+  exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id])
+
+  responses ExamResponse[]
+
+  @@unique([examId, questionId])
+  @@map("exam_questions")
+}
+
+model ExamAssignment {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  examId      String           @map("exam_id") @db.Uuid
+  employeeId  String           @map("employee_id") @db.Uuid
+  status      AssignmentStatus @default(assigned)
+  notifiedAt  DateTime?        @map("notified_at") @db.Timestamptz(6)
+  startedAt   DateTime?        @map("started_at") @db.Timestamptz(6)
+  submittedAt DateTime?        @map("submitted_at") @db.Timestamptz(6)
+  gradedAt    DateTime?        @map("graded_at") @db.Timestamptz(6)
+
+  // Results
+  totalMarksObtained Decimal? @map("total_marks_obtained") @db.Decimal(6, 2)
+  percentage         Decimal? @db.Decimal(5, 2)
+  /// A+, A, B+, B, C, F
+  grade              String?  @db.VarChar(5)
+  passed             Boolean?
+
+  gradedById        String? @map("graded_by") @db.Uuid
+  supervisorRemarks String? @map("supervisor_remarks")
+
+  exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id])
+  gradedBy User?    @relation("AssignmentGradedBy", fields: [gradedById], references: [id])
+
+  responses ExamResponse[]
+  sessions  ExamSession[]
+
+  @@unique([examId, employeeId])
+  @@index([employeeId])
+  @@index([status])
+  @@map("exam_assignments")
+}
+
+model ExamScheduleConfig {
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dayOfMonth    Int                  @default(15) @map("day_of_month") @db.SmallInt
+  fallbackRule  ScheduleFallbackRule @default(next_monday) @map("fallback_rule")
+  isActive      Boolean              @default(true) @map("is_active")
+  /// NULL = global setting.
+  outletId      String?              @map("outlet_id") @db.Uuid
+  templateId    String?              @map("template_id") @db.Uuid
+
+  notifyDaysBefore    Int      @default(3) @map("notify_days_before")
+  reminderDayBefore   Boolean? @default(true) @map("reminder_day_before")
+  reminderMorningOf   Boolean? @default(true) @map("reminder_morning_of")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  outlet   Outlet?       @relation(fields: [outletId], references: [id])
+  template ExamTemplate? @relation(fields: [templateId], references: [id])
+
+  @@map("exam_schedule_config")
+}
+
+// ---------------------------------------------------------------------------
+// Exam Responses & Grading (§4.1, §8 grading workflow)
+// ---------------------------------------------------------------------------
+
+model ExamResponse {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  examAssignmentId String @map("exam_assignment_id") @db.Uuid
+  examQuestionId   String @map("exam_question_id") @db.Uuid
+  questionId       String @map("question_id") @db.Uuid
+
+  responseType QuestionType @map("response_type")
+
+  // MCQ
+  selectedOptionId String?  @map("selected_option_id") @db.VarChar(50)
+  isCorrect        Boolean? @map("is_correct")
+
+  // Theory
+  theoryAnswer         String?   @map("theory_answer")
+  theoryAnswerLanguage Language? @map("theory_answer_language")
+
+  // Video/image
+  mediaUrls String[]   @map("media_urls")
+  mediaType MediaType? @map("media_type")
+
+  // Grading
+  marksObtained  Decimal?  @map("marks_obtained") @db.Decimal(5, 2)
+  maxMarks       Decimal   @map("max_marks") @db.Decimal(5, 2)
+  isAutoGraded   Boolean?  @default(false) @map("is_auto_graded")
+  gradedById     String?   @map("graded_by") @db.Uuid
+  gradedAt       DateTime? @map("graded_at") @db.Timestamptz(6)
+  graderComments String?   @map("grader_comments")
+  /// Video/image only: { criterion: marks_given }
+  rubricScores   Json?     @map("rubric_scores")
+
+  timeSpentSeconds Int?      @map("time_spent_seconds")
+  answeredAt       DateTime? @map("answered_at") @db.Timestamptz(6)
+
+  isFlagged Boolean? @default(false) @map("is_flagged")
+  isSkipped Boolean? @default(false) @map("is_skipped")
+
+  examAssignment ExamAssignment @relation(fields: [examAssignmentId], references: [id], onDelete: Cascade)
+  examQuestion   ExamQuestion   @relation(fields: [examQuestionId], references: [id])
+  question       Question       @relation(fields: [questionId], references: [id])
+  gradedBy       User?          @relation("ResponseGradedBy", fields: [gradedById], references: [id])
+
+  @@unique([examAssignmentId, examQuestionId])
+  @@index([examAssignmentId])
+  @@map("exam_responses")
+}
+
+model ExamSession {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  examAssignmentId String @map("exam_assignment_id") @db.Uuid
+
+  /// { model, os_version, app_version, screen_size }
+  deviceInfo Json?     @map("device_info")
+  ipAddress  String?   @map("ip_address") @db.Inet
+  startedAt  DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt    DateTime? @map("ended_at") @db.Timestamptz(6)
+
+  tabSwitches    Int?  @default(0) @map("tab_switches")
+  appBackgrounds Int?  @default(0) @map("app_backgrounds")
+  /// [{ type, timestamp, details }]
+  suspiciousActivities Json? @map("suspicious_activities")
+
+  // Face verification — reserved for a future phase.
+  faceVerified        Boolean? @map("face_verified")
+  faceMatchConfidence Decimal? @map("face_match_confidence") @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  examAssignment ExamAssignment @relation(fields: [examAssignmentId], references: [id])
+
+  @@index([examAssignmentId])
+  @@map("exam_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Performance & Analytics (§4.1)
+// ---------------------------------------------------------------------------
+
+model PerformanceSnapshot {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  month      Int
+  year       Int
+
+  examsAssigned  Int?     @default(0) @map("exams_assigned")
+  examsAttempted Int?     @default(0) @map("exams_attempted")
+  examsPassed    Int?     @default(0) @map("exams_passed")
+  examsMissed    Int?     @default(0) @map("exams_missed")
+  averageScore   Decimal? @map("average_score") @db.Decimal(5, 2)
+  highestScore   Decimal? @map("highest_score") @db.Decimal(5, 2)
+  lowestScore    Decimal? @map("lowest_score") @db.Decimal(5, 2)
+
+  /// { topic_id: { score, total, percentage } }
+  topicScores Json? @map("topic_scores")
+
+  outletRank     Int? @map("outlet_rank")
+  departmentRank Int? @map("department_rank")
+  overallRank    Int? @map("overall_rank")
+
+  /// Percentage change from the previous month.
+  improvementFromLast Decimal? @map("improvement_from_last") @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, month, year])
+  @@index([employeeId, year, month])
+  @@map("performance_snapshots")
+}
+
+model Certificate {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String  @map("employee_id") @db.Uuid
+  examId     String? @map("exam_id") @db.Uuid
+
+  type              CertificateType
+  title             String          @db.VarChar(255)
+  description       String?
+  certificateUrl    String?         @map("certificate_url")
+  certificateNumber String?         @unique @map("certificate_number") @db.VarChar(50)
+
+  issuedAt   DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
+  issuedById String?   @map("issued_by") @db.Uuid
+  validUntil DateTime? @map("valid_until") @db.Date
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+  exam     Exam?    @relation(fields: [examId], references: [id])
+  issuedBy User?    @relation("CertificateIssuedBy", fields: [issuedById], references: [id])
+
+  @@index([employeeId])
+  @@map("certificates")
+}
+
+model Reward {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+
+  type        RewardType
+  title       String     @db.VarChar(255)
+  description String?
+  month       Int?
+  year        Int?
+
+  /// What earned this reward.
+  criteria     Json?
+  awardedById  String?  @map("awarded_by") @db.Uuid
+  awardedAt    DateTime @default(now()) @map("awarded_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee  Employee @relation(fields: [employeeId], references: [id])
+  awardedBy User?    @relation("RewardAwardedBy", fields: [awardedById], references: [id])
+
+  @@index([employeeId])
+  @@map("rewards")
+}
+
+model TrainingAssignment {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+
+  topicId          String? @map("topic_id") @db.Uuid
+  sourceDocumentId String? @map("source_document_id") @db.Uuid
+  reason           String?
+
+  assignedById String   @map("assigned_by") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  dueDate      DateTime? @map("due_date") @db.Date
+
+  status          TrainingStatus @default(assigned)
+  completedAt     DateTime?      @map("completed_at") @db.Timestamptz(6)
+  completionNotes String?        @map("completion_notes")
+
+  // Auto-assignment provenance (§18 training recommendations).
+  isAutoAssigned    Boolean? @default(false) @map("is_auto_assigned")
+  triggeringExamId  String?  @map("triggering_exam_id") @db.Uuid
+  triggeringScore   Decimal? @map("triggering_score") @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  employee       Employee        @relation(fields: [employeeId], references: [id])
+  topic          Topic?          @relation(fields: [topicId], references: [id])
+  sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id])
+  assignedBy     User            @relation("TrainingAssignedBy", fields: [assignedById], references: [id])
+  triggeringExam Exam?           @relation("TrainingTriggeringExam", fields: [triggeringExamId], references: [id])
+
+  @@index([employeeId])
+  @@map("training_assignments")
+}
+
+model SupervisorRemark {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+
+  remarkType RemarkType @map("remark_type")
+  remark     String
+
+  relatedExamId String? @map("related_exam_id") @db.Uuid
+
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  relatedExam Exam?    @relation(fields: [relatedExamId], references: [id])
+  createdBy   User     @relation("RemarkCreatedBy", fields: [createdById], references: [id])
+
+  @@index([employeeId])
+  @@map("supervisor_remarks")
+}
+
+// ---------------------------------------------------------------------------
+// System (§4.1, §24)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+  /// e.g. 'employee.create', 'exam.grade', 'question.approve'
+  action     String  @db.VarChar(100)
+  entityType String  @map("entity_type") @db.VarChar(50)
+  entityId   String? @map("entity_id") @db.Uuid
+
+  oldValues Json? @map("old_values")
+  newValues Json? @map("new_values")
+
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  type  NotificationType
+  title String           @db.VarChar(255)
+  body  String
+  data  Json?
+
+  channel NotificationChannel @default(in_app)
+
+  isRead Boolean?  @default(false) @map("is_read")
+  readAt DateTime? @map("read_at") @db.Timestamptz(6)
+
+  sentAt      DateTime? @map("sent_at") @db.Timestamptz(6)
+  deliveredAt DateTime? @map("delivered_at") @db.Timestamptz(6)
+
+  whatsappMessageId String?         @map("whatsapp_message_id") @db.VarChar(100)
+  whatsappStatus    WhatsAppStatus? @map("whatsapp_status")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model Setting {
+  key         String   @id @db.VarChar(100)
+  value       Json
+  description String?
+  updatedById String?  @map("updated_by") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("SettingUpdatedBy", fields: [updatedById], references: [id])
+
+  @@map("settings")
+}
+
+model Translation {
+  id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// e.g. 'department.kitchen', 'designation.head_chef'
+  key      String   @db.VarChar(255)
+  language Language
+  value    String
+  context  String?  @db.VarChar(100)
+
+  @@unique([key, language])
+  @@map("translations")
+}
