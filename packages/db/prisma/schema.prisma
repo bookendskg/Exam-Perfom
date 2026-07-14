@@ -250,6 +250,23 @@ model User {
   @@map("users")
 }
 
+/// Per-period counter backing §4.1's exam codes (EX-2026-07-001).
+///
+/// A counter, not COUNT(*)+1 over exams: two admins scheduling at once would
+/// both read the same count and mint the same code, and exam_code is UNIQUE so
+/// one of them just fails. `INSERT .. ON CONFLICT DO UPDATE .. RETURNING` is a
+/// single atomic statement, so concurrent callers serialise on the row lock.
+///
+/// It also keeps codes stable: cancelling an exam must not free its number for
+/// reuse, or two different exams in the same month share a code in the record.
+model ExamCodeCounter {
+  /// 'YYYY-MM'
+  period  String @id @db.VarChar(7)
+  lastSeq Int    @default(0) @map("last_seq")
+
+  @@map("exam_code_counters")
+}
+
 /// Authentication sessions, per §7.5.
 ///
 /// Named UserSession because ExamSession already exists and is unrelated (it

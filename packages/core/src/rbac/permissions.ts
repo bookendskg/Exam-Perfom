@@ -75,6 +75,14 @@ export const PERMISSIONS = {
   'exam:schedule':        { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
   'exam:override_schedule': { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
 
+  // Not a §3.2 row. Reading an exam's definition follows its scheduling row —
+  // whoever may schedule an exam may see one. Trainers are included because
+  // they grade its responses (§3.2 grading rows) and hr because they own
+  // reporting. Staff read exams through /staff/*, never here: this exposes the
+  // question set, which would be the answer key.
+  'exam:read':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'all', staff: 'none' },
+  'exam_template:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
+
   // --- Exam Taking (§3.2) — staff only --------------------------------------
   'exam:take':        { super_admin: 'none', admin: 'none', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'all' },
   'result:read_own':  { super_admin: 'none', admin: 'none', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'own_resource' },

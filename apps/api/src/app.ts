@@ -18,6 +18,7 @@ import { buildEmployeeRouter } from './employees/employee.routes.js'
 import { buildStaffRouter } from './staff/staff.routes.js'
 import { buildOrganisationRouters } from './organisation/organisation.routes.js'
 import { buildQuestionRouters } from './questions/question.routes.js'
+import { buildExamRouters } from './exams/exam.routes.js'
 
 /**
  * Everything the app needs, passed in rather than imported. Tests inject a
@@ -94,6 +95,10 @@ export function buildApp(deps: Deps): Application {
   app.use('/api/v1/questions', questionRouter)
   app.use('/api/v1/topics', topicRouter)
   app.use('/api/v1/source-documents', documentRouter)
+
+  const { examRouter, templateRouter } = buildExamRouters(deps)
+  app.use('/api/v1/exam-templates', templateRouter)
+  app.use('/api/v1/exams', examRouter)
 
   app.use(notFoundHandler)
   app.use(errorHandler(logger))
