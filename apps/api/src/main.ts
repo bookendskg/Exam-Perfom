@@ -4,6 +4,7 @@ import { createLogger } from './infra/logger.js'
 import { createSessionStore } from './infra/session-store/index.js'
 import { assertUtf8Database, assertTrilingualRoundTrip } from './infra/assert-utf8.js'
 import { buildApp } from './app.js'
+import { startExamScheduler } from './scheduling/cron.js'
 
 /**
  * Process entry point. Owns the socket and the shutdown sequence; app.ts owns
@@ -23,6 +24,10 @@ async function main() {
 
   const app = buildApp({ config, logger, prisma, sessionStore })
 
+  // Started here rather than in buildApp: every test calls buildApp, and none
+  // of them should spawn a background timer that outlives the test.
+  const scheduler = startExamScheduler(prisma, logger)
+
   const server = app.listen(config.PORT, () => {
     logger.info(
       { port: config.PORT, env: config.NODE_ENV, sessionStore: config.SESSION_STORE },
@@ -34,6 +39,7 @@ async function main() {
   // deploy returns 500s to whoever was mid-request.
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'Shutting down')
+    scheduler.stop()
     server.close(async () => {
       await prisma.$disconnect()
       process.exit(0)
