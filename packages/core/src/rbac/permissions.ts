@@ -15,6 +15,30 @@ import type { Role } from '../roles.js'
  */
 export type Scope = 'all' | 'own_outlet' | 'own_resource' | 'none'
 
+/**
+ * TRAINER SCOPE — a deliberate deviation from §3.2. Needs client sign-off.
+ *
+ * §3.2 gives `trainer` "Own outlet" on employee and question reads. That scope
+ * is not implementable as written:
+ *
+ *  - `own_outlet` resolves from `Outlet.managerId`, which only an
+ *    outlet_manager ever holds. A trainer's managedOutletIds is therefore
+ *    ALWAYS empty, so "own outlet" means ∅ and the trainer gets 403 on
+ *    everything — a dead role, exactly like outlet_manager was before Module 3.
+ *  - The obvious alternative — resolving a trainer's outlet from
+ *    `Employee.outletId` — contradicts §3.1, which says "Trainer can belong to
+ *    multiple outlets". Employee.outletId is singular, and §4.1 has no
+ *    trainer↔outlets table to express the plural.
+ *
+ * So §3.1 and §3.2 disagree, and §4.1 cannot model either reading. Until that
+ * is resolved, trainers get 'all' on reads: they author questions across the
+ * bank and grade theory answers, so seeing the content is inherent to the job,
+ * and a working role beats a dead one. Their WRITES stay 'own_resource'
+ * (§3.2's "Own questions"), which is the restriction that actually matters.
+ *
+ * To narrow this properly, §4.1 needs a trainer_outlets join table.
+ */
+
 // prettier-ignore
 // ^ The row-per-line table alignment IS the feature: it is what lets someone
 //   read this side by side with §3.2 and spot a difference. Prettier would wrap
@@ -22,18 +46,29 @@ export type Scope = 'all' | 'own_outlet' | 'own_resource' | 'none'
 export const PERMISSIONS = {
   // --- Employee Management (§3.2) -------------------------------------------
   'employee:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
-  'employee:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'all', staff: 'own_resource' },
+  // trainer is 'all', not §3.2's "Own outlet" — see TRAINER SCOPE below.
+  'employee:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'all', staff: 'own_resource' },
   'employee:update': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
   'employee:delete': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
   'employee:photo:upload': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'own_resource' },
 
   // --- Question Bank (§3.2) -------------------------------------------------
   'question:create': { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'none', staff: 'none' },
-  'question:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
+  'question:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
   'question:update': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_resource', hr: 'none', staff: 'none' },
   'question:delete': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_resource', hr: 'none', staff: 'none' },
   'question:approve': { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
   'question:import':  { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
+
+  // --- Topics & source documents (§10) --------------------------------------
+  // Not a separate §3.2 row: topics and source documents are the question
+  // bank's structure, so they follow the question-bank rows. Reads go to
+  // whoever can author questions; writes to whoever can edit them. Staff and hr
+  // are excluded — §3.2 gives them nothing in the question bank.
+  'topic:read':           { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'none', staff: 'none' },
+  'topic:manage':         { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
+  'source_document:read': { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'none', staff: 'none' },
+  'source_document:manage': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
 
   // --- Exam Builder (§3.2) --------------------------------------------------
   'exam_template:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
@@ -60,6 +95,20 @@ export const PERMISSIONS = {
   'designation:manage': { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
   'role:manage':        { super_admin: 'all', admin: 'none', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
   'audit_log:read':     { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
+
+  // --- Organisational reads -------------------------------------------------
+  // NOT in §3.2, which only specifies "Manage outlets/departments/designations".
+  // Reading them is granted to every role because the data is unavoidable: a
+  // staff member's profile shows their outlet name, and every create form needs
+  // department and designation dropdowns. Withholding it would break the app
+  // without protecting anything — this is reference data, not a secret.
+  // Flag for client confirmation.
+  'outlet:read':        { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'all', staff: 'all' },
+  'department:read':    { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'all', staff: 'all' },
+  'designation:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'all', staff: 'all' },
+  // Outlet performance figures ARE sensitive — §3.2's "View all reports" row
+  // governs these, so they follow it exactly rather than outlet:read.
+  'outlet:stats':       { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
 
   // --- Rewards & Training (§3.2) --------------------------------------------
   'reward:assign':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },

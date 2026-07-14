@@ -1,6 +1,9 @@
-import { Router } from 'express'
+import { Router, type RequestHandler } from 'express'
+import multer, { MulterError } from 'multer'
 import { ok } from '@bookends/core'
 import type { Deps } from '../app.js'
+import { BulkImportService, EMPLOYEE_IMPORT_COLUMNS } from './bulk-import/bulk-import.service.js'
+import { parseUpload } from '../bulk-import/parse.js'
 import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
@@ -20,7 +23,45 @@ import {
 
 export function buildEmployeeRouter(deps: Deps) {
   const service = new EmployeeService(deps.prisma, deps.sessionStore)
+  const bulkImport = new BulkImportService(deps.prisma)
   const router = Router()
+
+  // Memory storage: a 5 MB spreadsheet does not need a disk round trip, and
+  // never touching the filesystem means no temp files to clean up or leak.
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  })
+
+  /**
+   * Multer rejects oversized or unexpected files with a MulterError, which the
+   * terminal handler would flatten to an opaque 500. These are the caller's
+   * mistakes and deserve a §5.2 validation error saying what went wrong.
+   */
+  const uploadSingle = (field: string): RequestHandler => {
+    const handler = upload.single(field)
+    return (req, res, next) => {
+      handler(req, res, (err: unknown) => {
+        if (err instanceof MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            next(
+              ApiError.validation('The file is too large', [
+                { field: 'file', message: 'Maximum upload size is 5 MB' },
+              ])
+            )
+            return
+          }
+          next(
+            ApiError.validation('Could not read the upload', [
+              { field: err.field ?? 'file', message: err.code },
+            ])
+          )
+          return
+        }
+        next(err)
+      })
+    }
+  }
 
   const scopeOf = (req: { scope?: 'all' | 'own_outlet' | 'own_resource' | 'none' }) => {
     if (!req.scope) throw ApiError.forbidden()
@@ -63,6 +104,47 @@ export function buildEmployeeRouter(deps: Deps) {
           )
           // Shown once and never again — it is not stored in plaintext.
           res.status(201).json(ok({ ...employee, temporaryPassword }))
+        } catch (err) {
+          next(err)
+        }
+      })()
+    }
+  )
+
+  /**
+   * §5.3 POST /api/v1/employees/bulk-import
+   *
+   * Mounted above the /:id routes so "bulk-import" is never read as an id.
+   *
+   * Pass ?dryRun=true for §8.3's preview: every row is validated and reported,
+   * nothing is written. Without it, valid rows import and invalid rows are
+   * skipped and reported (§8.3 "Allow partial import").
+   */
+  router.post(
+    '/bulk-import',
+    requirePermission('employee:create'),
+    uploadSingle('file'),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          if (!req.file) {
+            throw ApiError.validation('No file uploaded', [
+              { field: 'file', message: 'Attach a .csv or .xlsx file in the "file" field' },
+            ])
+          }
+
+          const rows = await parseUpload(
+            req.file.buffer,
+            req.file.originalname,
+            req.file.mimetype,
+            EMPLOYEE_IMPORT_COLUMNS
+          )
+
+          const report = await bulkImport.run(requirePrincipal(req), scopeOf(req), rows, {
+            dryRun: req.query['dryRun'] === 'true',
+          })
+
+          res.json(ok(report))
         } catch (err) {
           next(err)
         }

@@ -13,6 +13,32 @@ describe('permission matrix shape', () => {
     }
   })
 
+  it('only gives own_outlet to roles that can actually hold an outlet', () => {
+    /**
+     * `own_outlet` resolves from Outlet.managerId, which only an outlet_manager
+     * is ever assigned. Granting it to any other role produces an ALWAYS-EMPTY
+     * scope — every query returns nothing and every write 403s, so the role
+     * looks broken rather than restricted.
+     *
+     * That is not hypothetical: §3.2 asks for trainer = "Own outlet", and
+     * transcribing it literally made trainers a dead role until this caught it.
+     * If another role should genuinely be outlet-scoped, it needs a way to be
+     * linked to outlets first.
+     */
+    const CAN_HOLD_OUTLETS = new Set<string>(['outlet_manager'])
+
+    for (const permission of PERMISSION_KEYS) {
+      for (const role of ROLES) {
+        if (PERMISSIONS[permission][role] !== 'own_outlet') continue
+        expect(
+          CAN_HOLD_OUTLETS.has(role),
+          `"${permission}" gives ${role} own_outlet scope, but ${role} is never assigned as ` +
+            `Outlet.managerId — their scope would always be empty and the permission dead.`
+        ).toBe(true)
+      }
+    }
+  })
+
   it('uses only valid scope values', () => {
     const valid = new Set(['all', 'own_outlet', 'own_resource', 'none'])
     for (const permission of PERMISSION_KEYS) {
@@ -85,12 +111,49 @@ describe('§3.2 matrix transcription', () => {
   })
 
   it('never grants staff a write outside their own resources', () => {
+    /**
+     * Staff may hold 'all' scope on exactly these, and each needs a reason.
+     * Anything else reaching 'all' is a privilege widening that should be
+     * argued for here rather than slipped into the matrix.
+     */
+    const STAFF_MAY_HAVE_ALL = new Set<string>([
+      // §3.2 — taking exams is the staff role's entire purpose.
+      'exam:take',
+      // Reference data. A staff member's own profile shows their outlet and
+      // designation names, so withholding these breaks the app while
+      // protecting nothing. All three are read-only.
+      'outlet:read',
+      'department:read',
+      'designation:read',
+    ])
+
     for (const permission of PERMISSION_KEYS) {
       const scope = permissionScope('staff', permission)
       expect(['none', 'own_resource', 'all'].includes(scope)).toBe(true)
-      // 'all' for staff is only legitimate on exam:take.
-      if (scope === 'all') expect(permission).toBe('exam:take')
+      if (scope === 'all') {
+        expect(
+          STAFF_MAY_HAVE_ALL.has(permission),
+          `staff were granted 'all' on "${permission}". If that is intended, add it to ` +
+            `STAFF_MAY_HAVE_ALL with a reason; otherwise this is a privilege escalation.`
+        ).toBe(true)
+      }
     }
+  })
+
+  it('never grants staff anything beyond read on the org structure', () => {
+    // The read grants above must not become a foothold: staff must still be
+    // unable to change any of it.
+    for (const permission of [
+      'outlet:manage',
+      'department:manage',
+      'designation:manage',
+    ] as const) {
+      expect(isAllowed('staff', permission)).toBe(false)
+    }
+    // Outlet performance figures are NOT reference data — §3.2's reports row
+    // governs them.
+    expect(isAllowed('staff', 'outlet:stats')).toBe(false)
+    expect(isAllowed('trainer', 'outlet:stats')).toBe(false)
   })
 
   it('gives super_admin at least as much as admin everywhere except exam-taking', () => {

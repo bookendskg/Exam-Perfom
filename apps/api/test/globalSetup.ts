@@ -40,10 +40,26 @@ export async function setup() {
     port,
     persistent: false,
     onLog: () => {},
+    /**
+     * NOT optional. initdb otherwise inherits the host's system locale, which
+     * on a Windows machine means a WIN1252 cluster — and WIN1252 physically
+     * cannot store Devanagari or Gujarati. Every §6 trilingual column would
+     * reject its content with:
+     *
+     *   character with byte sequence 0xe0 0xa4 0x96 in encoding "UTF8"
+     *   has no equivalent in encoding "WIN1252"
+     *
+     * The same trap applies to production: provision the real database with
+     * UTF8 explicitly. assertUtf8Database() in the API refuses to boot without
+     * it.
+     */
+    initdbFlags: ['--encoding=UTF8', '--locale=C'],
   })
 
   await pg.initialise()
   await pg.start()
+  // createDatabase() issues a bare CREATE DATABASE, which inherits template1's
+  // encoding — fine now that the cluster itself is UTF8.
   await pg.createDatabase('bookends_test')
 
   const url = `postgresql://test:test@localhost:${port}/bookends_test`

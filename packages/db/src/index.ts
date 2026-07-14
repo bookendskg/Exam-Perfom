@@ -19,3 +19,5 @@ import { PrismaClient } from '@prisma/client'
 export function createPrismaClient(url?: string): PrismaClient {
   return url ? new PrismaClient({ datasourceUrl: url }) : new PrismaClient()
 }
+
+export * from './seed-data.js'

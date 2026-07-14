@@ -1,4 +1,11 @@
-import { createPrismaClient, type PrismaClient } from '@bookends/db'
+import {
+  createPrismaClient,
+  seedReferenceData,
+  SEED_OUTLETS,
+  SEED_DEPARTMENTS,
+  SEED_DESIGNATIONS,
+  type PrismaClient,
+} from '@bookends/db'
 
 let client: PrismaClient | undefined
 
@@ -42,18 +49,22 @@ const MUTABLE_TABLES = [
 ] as const
 
 /**
- * Clears test-created rows while preserving the §9 reference data.
+ * Resets the database to the state a freshly-seeded one is in.
  *
  * Deliberately NOT `TRUNCATE ... CASCADE`. Postgres cascades a TRUNCATE by
  * foreign-key *constraint*, not by data — and `outlets.manager_id` references
  * `users`, so truncating users silently takes outlets (and, through
- * outlet_departments, the department mappings) with it. That wiped the seeded
- * reference data on every test.
+ * outlet_departments, the department mappings) with it.
  *
  * Plain TRUNCATE is not an option either: Postgres refuses to truncate a table
- * that is referenced by an unlisted table. So: null the one back-reference, then
- * DELETE leaf-first. Slower than TRUNCATE, but correct — and at these row counts
- * the difference is not measurable.
+ * referenced by an unlisted table. So: null the one back-reference, then DELETE
+ * leaf-first. At these row counts the cost is not measurable.
+ *
+ * Reference data is RESTORED, not merely preserved. Tests mutate it — they
+ * deactivate outlets, create departments, reassign managers — and leaving those
+ * changes in place makes later tests depend on execution order. A test that
+ * deactivates Aiko silently gives every subsequent outlet_manager an empty
+ * scope, because resolvePrincipal filters on isActive.
  */
 export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void> {
   await prisma.$transaction([
@@ -64,7 +75,27 @@ export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void
     // on BK-AK-001 would depend on test execution order.
     prisma.$executeRawUnsafe(`UPDATE "outlets" SET "last_employee_seq" = 0`),
     ...MUTABLE_TABLES.map((t) => prisma.$executeRawUnsafe(`DELETE FROM "${t}"`)),
+    // Drop org rows a test created. Keyed on the seeded codes, which come from
+    // @bookends/db so they cannot drift from what the real seed writes.
+    prisma.$executeRawUnsafe(
+      `DELETE FROM "designations" WHERE "code" NOT IN (${sqlList(SEED_DESIGNATIONS.map((d) => d.code))})`
+    ),
+    prisma.$executeRawUnsafe(
+      `DELETE FROM "departments" WHERE "code" NOT IN (${sqlList(SEED_DEPARTMENTS.map((d) => d.code))})`
+    ),
+    prisma.$executeRawUnsafe(
+      `DELETE FROM "outlets" WHERE "code" NOT IN (${sqlList(SEED_OUTLETS.map((o) => o.code))})`
+    ),
   ])
+
+  // Restores isActive, names, levels and the outlet/department mappings that a
+  // test may have changed or deleted.
+  await seedReferenceData(prisma)
+}
+
+/** The codes are compile-time constants from @bookends/db, never user input. */
+function sqlList(values: readonly string[]): string {
+  return values.map((v) => `'${v}'`).join(', ')
 }
 
 export async function disconnectDb(): Promise<void> {

@@ -2,6 +2,7 @@ import { createPrismaClient } from '@bookends/db'
 import { loadConfig } from './config/env.js'
 import { createLogger } from './infra/logger.js'
 import { createSessionStore } from './infra/session-store/index.js'
+import { assertUtf8Database, assertTrilingualRoundTrip } from './infra/assert-utf8.js'
 import { buildApp } from './app.js'
 
 /**
@@ -13,6 +14,12 @@ async function main() {
   const logger = createLogger(config)
   const prisma = createPrismaClient(config.DATABASE_URL)
   const sessionStore = createSessionStore(config, prisma)
+
+  // Before accepting a single request: a non-UTF8 database accepts ASCII and
+  // then rejects the first Hindi question, which would look like an
+  // application bug months after deployment (§6).
+  await assertUtf8Database(prisma)
+  await assertTrilingualRoundTrip(prisma)
 
   const app = buildApp({ config, logger, prisma, sessionStore })
 
