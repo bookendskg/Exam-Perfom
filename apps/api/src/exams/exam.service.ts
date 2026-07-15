@@ -4,6 +4,8 @@ import { pageMeta, type Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import type { Principal } from '../infra/session-store/index.js'
 import { scopeToWhere, assertInScope, assertCreateInScope } from '../rbac/scope.js'
+import { examMonthWindow } from '../plans/plan.service.js'
+import type { PlanService } from '../plans/plan.service.js'
 import { claimExamCode } from './exam-code.js'
 import { QuestionSelector, sumMarks } from './question-selection.js'
 import { PublishValidator } from './publish-validation.js'
@@ -50,7 +52,10 @@ export class ExamService {
   private readonly selector: QuestionSelector
   private readonly validator: PublishValidator
 
-  constructor(private readonly prisma: PrismaClient) {
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly plans: PlanService
+  ) {
     this.selector = new QuestionSelector(prisma)
     this.validator = new PublishValidator(prisma)
   }
@@ -172,6 +177,30 @@ export class ExamService {
     const totalMarks = declared > 0 ? declared : sumMarks(questions)
 
     const exam = await this.prisma.$transaction(async (tx) => {
+      /**
+       * §4.3, and this is the ONLY gate for exams — there is no route
+       * middleware for maxExamsPerMonth.
+       *
+       * Deliberate. This method has two callers: POST /exams, and the
+       * auto-scheduling cron (scheduler.service.ts), which has no Express and no
+       * req. A middleware-only guard would miss the one path that creates exams
+       * in bulk, unattended, per outlet, every month. The codebase already made
+       * this exact argument for the autoScheduling flag: "the job is the other
+       * door into the same feature."
+       *
+       * Counted on the month the exam RUNS in, not the month it was created —
+       * see examMonthWindow. It goes before claimExamCode so a refused exam does
+       * not burn a code it will never use.
+       *
+       * §4.3's "allow in-progress exams to complete" needs no exemption logic:
+       * gating here, at the only Exam insert in the codebase, leaves the
+       * exam-taking and grading paths physically out of reach. They never insert
+       * an Exam.
+       */
+      await this.plans.assertCapacity('maxExamsPerMonth', principal.tenantId, tx, {
+        month: examMonthWindow(scheduledDate),
+      })
+
       // Claimed inside the transaction so a failed insert rolls the counter
       // back rather than burning a code.
       const examCode = await claimExamCode(tx, principal.tenantId, scheduledDate)

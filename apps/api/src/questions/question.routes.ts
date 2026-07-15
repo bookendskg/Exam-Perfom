@@ -2,6 +2,8 @@ import { Router } from 'express'
 import { ok, type Language } from '@bookends/core'
 import type { Deps } from '../app.js'
 import { singleFileUpload } from '../http/middleware/upload.js'
+import { planGuard } from '../plans/plan-guard.middleware.js'
+import { PlanService } from '../plans/plan.service.js'
 import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
@@ -43,10 +45,12 @@ import {
 } from './source-document.service.js'
 
 export function buildQuestionRouters(deps: Deps) {
-  const questions = new QuestionService(deps.prisma)
+  const plans = new PlanService(deps.prisma)
+  const questions = new QuestionService(deps.prisma, plans)
   const topics = new TopicService(deps.prisma)
   const documents = new SourceDocumentService(deps.prisma)
-  const importer = new QuestionImportService(deps.prisma)
+  const importer = new QuestionImportService(deps.prisma, plans)
+  const guard = planGuard(plans)
 
   // Shared with the employee importer. Beyond deduplicating the multer error
   // translation, the shared version is what preserves the tenant context across
@@ -78,6 +82,10 @@ export function buildQuestionRouters(deps: Deps) {
   questionRouter.post(
     '/bulk-import',
     requirePermission('question:import'),
+    // Fast-fail only — do NOT mistake this for enforcement. It fires once, and
+    // the importer then inserts N rows. A tenant at 499/500 passes here and
+    // would land at 699. QuestionImportService decrements real capacity per row.
+    guard.limit('maxQuestions'),
     uploadSingle('file'),
     (req, res, next) => {
       void (async () => {
@@ -130,6 +138,12 @@ export function buildQuestionRouters(deps: Deps) {
     '/',
     requirePermission('question:create'),
     validate({ body: createQuestionSchema }),
+    // Both after validate(): the type gate reads the VALIDATED body, so it can
+    // trust `type` is a real QuestionType and only has to ask whether the plan
+    // includes it. Feature gate first — "not on your plan" is a better answer
+    // than "you have too many" when both are true.
+    guard.questionType(),
+    guard.limit('maxQuestions'),
     (req, res, next) => {
       void (async () => {
         try {

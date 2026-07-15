@@ -6,6 +6,7 @@ import {
   type Language,
   type Scope,
 } from '@bookends/core'
+import type { PlanService } from '../plans/plan.service.js'
 import { ApiError } from '../http/api-error.js'
 import type { Principal } from '../infra/session-store/index.js'
 import { scopeToWhere, assertInScope, assertCreateInScope } from '../rbac/scope.js'
@@ -36,7 +37,10 @@ const LIST_SELECT = {
 } satisfies Prisma.QuestionSelect
 
 export class QuestionService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly plans: PlanService
+  ) {}
 
   /** §5.3 GET /questions. */
   async list(principal: Principal, scope: Scope, query: ListQuestionsQuery) {
@@ -132,6 +136,13 @@ export class QuestionService {
     assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
 
     await this.assertRefsExist(input.topicId, input.departmentId, input.sourceDocumentId)
+
+    // §4.3, authoritatively — the route's guards are a fast-fail. Both live here
+    // too because this method is reachable without a request (and because a
+    // route guard is one refactor away from being dropped).
+    const plan = await this.plans.forTenant(principal.tenantId)
+    this.plans.assertQuestionTypeAllowed(plan, input.type)
+    await this.plans.assertCapacity('maxQuestions', principal.tenantId)
 
     return this.prisma.question.create({
       data: {

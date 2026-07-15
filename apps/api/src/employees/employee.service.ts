@@ -9,6 +9,7 @@ import {
 } from '@bookends/core'
 import { randomBytes } from 'node:crypto'
 import { ApiError } from '../http/api-error.js'
+import type { PlanService } from '../plans/plan.service.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
 import { scopeToWhere, assertInScope, assertCreateInScope } from '../rbac/scope.js'
 import { claimEmployeeCode } from './employee-code.js'
@@ -46,7 +47,8 @@ export class EmployeeService {
    */
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly sessionStore: SessionStore
+    private readonly sessionStore: SessionStore,
+    private readonly plans: PlanService
   ) {}
 
   /**
@@ -160,6 +162,17 @@ export class EmployeeService {
     const passwordHash = await hashPassword(plainPassword)
 
     const employee = await this.prisma.$transaction(async (tx) => {
+      // §4.3, authoritatively. The route's planGuard already fast-failed an
+      // at-capacity tenant, but this is the check that counts: the ~130ms argon2
+      // hash above sits between that one and this insert, and two requests
+      // racing through that window would both pass. Inside the transaction the
+      // window is sub-millisecond.
+      //
+      // No lock. 301 employees on a 300 plan is an upsell conversation, not a
+      // corruption — unlike an exam code, which must never be reused. Buy
+      // exactness with FOR UPDATE only if a real overshoot ever shows up.
+      await this.plans.assertCapacity('maxEmployees', principal.tenantId, tx)
+
       const user = await tx.user.create({
         data: {
           tenantId: principal.tenantId,

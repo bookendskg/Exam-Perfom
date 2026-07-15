@@ -5,6 +5,8 @@ import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
 import { ApiError } from '../http/api-error.js'
+import { planGuard } from '../plans/plan-guard.middleware.js'
+import { PlanService } from '../plans/plan.service.js'
 import { OutletService } from './outlet.service.js'
 import { OrganisationService } from './organisation.service.js'
 import {
@@ -27,8 +29,10 @@ import {
 
 /** §5.3 outlets, departments and designations. */
 export function buildOrganisationRouters(deps: Deps) {
-  const outlets = new OutletService(deps.prisma, deps.sessionStore)
+  const plans = new PlanService(deps.prisma)
+  const outlets = new OutletService(deps.prisma, deps.sessionStore, plans)
   const org = new OrganisationService(deps.prisma)
+  const guard = planGuard(plans)
 
   const scopeOf = (req: { scope?: 'all' | 'own_outlet' | 'own_resource' | 'none' }) => {
     if (!req.scope) throw ApiError.forbidden()
@@ -56,6 +60,7 @@ export function buildOrganisationRouters(deps: Deps) {
     '/',
     requirePermission('outlet:manage'),
     validate({ body: createOutletSchema }),
+    guard.limit('maxOutlets'),
     (req, res, next) => {
       void (async () => {
         try {

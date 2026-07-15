@@ -2,6 +2,7 @@ import type { PrismaClient } from '@bookends/db'
 import { defaultStaffPassword, hashPassword, type Scope } from '@bookends/core'
 import type { ZodError } from 'zod'
 import type { Principal } from '../../infra/session-store/index.js'
+import type { PlanService } from '../../plans/plan.service.js'
 import { assertCreateInScope } from '../../rbac/scope.js'
 import { claimEmployeeCode } from '../employee-code.js'
 import type { RawRow } from '../../bulk-import/parse.js'
@@ -46,7 +47,10 @@ export interface ImportReport {
  * needs every problem in one pass, not the first one.
  */
 export class BulkImportService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly plans: PlanService
+  ) {}
 
   async run(
     principal: Principal,
@@ -138,6 +142,26 @@ export class BulkImportService {
       rows: results,
     }
 
+    /**
+     * §4.3 batch pre-flight — the whole file, as one decision.
+     *
+     * Here, and not elsewhere, because this is the only point where all three
+     * facts hold at once: `importable` is complete so N is exact, nothing has
+     * been written yet, and dryRun has not returned — so §8.3's preview reports
+     * the overage instead of promising 60 valid rows the real run then refuses.
+     *
+     * It hard-fails the file rather than importing what fits. §8.3's partial
+     * import is about ROW-level defects — a bad phone, an unknown outlet — which
+     * are properties of a row. A plan ceiling is not: there is no non-arbitrary
+     * way to choose which 50 of your 60 new hires get to exist. (Questions
+     * import partially for exactly the inverse reason; see the note there.)
+     */
+    if (importable.length > 0) {
+      await this.plans.assertCapacity('maxEmployees', principal.tenantId, this.prisma, {
+        adding: importable.length,
+      })
+    }
+
     if (options.dryRun) return report
 
     for (const { result, data } of importable) {
@@ -171,6 +195,22 @@ export class BulkImportService {
     const passwordHash = await hashPassword(temporaryPassword)
 
     return this.prisma.$transaction(async (tx) => {
+      /**
+       * Backstop, and ONLY a backstop.
+       *
+       * Under normal use the batch pre-flight above already refused the file, so
+       * this never fires. It exists for two imports racing: both pass the
+       * pre-flight (which is outside any transaction), and without this they
+       * would both import in full and land at double the ceiling. Here the
+       * second one's excess rows fail individually, and the loop's catch turns
+       * them into row errors — an ugly but bounded outcome.
+       *
+       * As the SOLE check it would be wrong: it produces exactly the "50 created,
+       * 10 row errors" shape §23.2 calls a silent failure, which is why the
+       * pre-flight decides the file and this only catches the race.
+       */
+      await this.plans.assertCapacity('maxEmployees', principal.tenantId, tx)
+
       const user = await tx.user.create({
         data: {
           tenantId: principal.tenantId,

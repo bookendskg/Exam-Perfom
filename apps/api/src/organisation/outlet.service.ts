@@ -2,6 +2,7 @@ import type { PrismaClient } from '@bookends/db'
 import { currentTenantId } from '@bookends/db'
 import type { Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
+import type { PlanService } from '../plans/plan.service.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
 import type { CreateOutletInput, ListQuery, UpdateOutletInput } from './organisation.schemas.js'
 
@@ -28,7 +29,8 @@ export class OutletService {
    */
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly sessionStore: SessionStore
+    private readonly sessionStore: SessionStore,
+    private readonly plans: PlanService
   ) {}
 
   async list(query: ListQuery) {
@@ -60,9 +62,15 @@ export class OutletService {
   async create(input: CreateOutletInput) {
     if (input.managerId) await this.assertAssignableManager(input.managerId)
 
+    const tenantId = currentTenantId()
+
+    // §4.3. Authoritative — the route's planGuard is only a fast-fail. No
+    // transaction to sit inside here (this is a single insert), so it is
+    // count-then-create with a small race, same trade as everywhere else.
+    await this.plans.assertCapacity('maxOutlets', tenantId)
+
     // Per tenant: "AK" being taken at another customer is not this tenant's
     // problem, and reporting it as a conflict would leak that they exist.
-    const tenantId = currentTenantId()
     const existing = await this.prisma.outlet.findUnique({
       where: { tenantId_code: { tenantId, code: input.code } },
     })
@@ -116,6 +124,23 @@ export class OutletService {
           ]
         )
       }
+    }
+
+    /**
+     * §4.3 — the one a create-only guard misses.
+     *
+     * The limit counts ACTIVE outlets, so false→true crosses the ceiling with
+     * no create() involved. Without this: deactivate A, create B (now at 1/1),
+     * reactivate A, and the tenant sits at 2 on a 1-outlet plan having never
+     * touched a guarded route. The deactivation rule above (an outlet with live
+     * staff cannot be switched off) makes that cycle awkward but does not close
+     * it — an empty outlet walks straight through.
+     *
+     * Guarded only on the transition, so an ordinary PUT that leaves isActive
+     * true does not spuriously 403 a tenant sitting exactly at its limit.
+     */
+    if (input.isActive === true && !existing.isActive) {
+      await this.plans.assertCapacity('maxOutlets', currentTenantId())
     }
 
     const outlet = await this.prisma.outlet.update({

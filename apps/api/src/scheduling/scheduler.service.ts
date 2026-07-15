@@ -2,6 +2,7 @@ import type { PrismaClient } from '@bookends/db'
 import { currentTenantId, runAsPlatform, runInTenant } from '@bookends/db'
 import type { Logger } from 'pino'
 import { ExamService } from '../exams/exam.service.js'
+import { PlanService } from '../plans/plan.service.js'
 import type { Principal } from '../infra/session-store/index.js'
 import { resolveExamDate, istMonthOf } from './exam-date.js'
 
@@ -44,7 +45,9 @@ export class SchedulerService {
     private readonly prisma: PrismaClient,
     private readonly logger: Logger
   ) {
-    this.exams = new ExamService(prisma)
+    // The same ExamService the HTTP routes use, so the §4.3 exam limit applies
+    // to this door too. The job must not be the way around a plan.
+    this.exams = new ExamService(prisma, new PlanService(prisma))
   }
 
   /**

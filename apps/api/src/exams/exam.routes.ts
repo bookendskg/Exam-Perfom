@@ -5,6 +5,7 @@ import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
 import { ApiError } from '../http/api-error.js'
+import { PlanService } from '../plans/plan.service.js'
 import { ExamService } from './exam.service.js'
 import { TemplateService } from './template.service.js'
 import {
@@ -26,7 +27,10 @@ import {
 } from './exam.schemas.js'
 
 export function buildExamRouters(deps: Deps) {
-  const exams = new ExamService(deps.prisma)
+  // No planGuard on the exam routes: maxExamsPerMonth depends on the exam's
+  // scheduledDate and is enforced inside ExamService's transaction, which is
+  // also the only place that covers the auto-scheduling cron.
+  const exams = new ExamService(deps.prisma, new PlanService(deps.prisma))
   const templates = new TemplateService(deps.prisma)
 
   const scopeOf = (req: { scope?: 'all' | 'own_outlet' | 'own_resource' | 'none' }) => {

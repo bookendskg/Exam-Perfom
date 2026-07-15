@@ -4,6 +4,8 @@ import type { Deps } from '../app.js'
 import { BulkImportService, EMPLOYEE_IMPORT_COLUMNS } from './bulk-import/bulk-import.service.js'
 import { parseUpload } from '../bulk-import/parse.js'
 import { singleFileUpload } from '../http/middleware/upload.js'
+import { planGuard } from '../plans/plan-guard.middleware.js'
+import { PlanService } from '../plans/plan.service.js'
 import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
@@ -22,8 +24,10 @@ import {
 } from './employee.schemas.js'
 
 export function buildEmployeeRouter(deps: Deps) {
-  const service = new EmployeeService(deps.prisma, deps.sessionStore)
-  const bulkImport = new BulkImportService(deps.prisma)
+  const plans = new PlanService(deps.prisma)
+  const service = new EmployeeService(deps.prisma, deps.sessionStore, plans)
+  const bulkImport = new BulkImportService(deps.prisma, plans)
+  const guard = planGuard(plans)
   const router = Router()
 
   // Memory storage: a 5 MB spreadsheet does not need a disk round trip, and
@@ -59,10 +63,16 @@ export function buildEmployeeRouter(deps: Deps) {
   )
 
   // §5.3 POST /api/v1/employees
+  //
+  // planGuard sits after requirePermission (a caller who lacks permission must
+  // not learn our plan limits) and after validate (a malformed body should 400
+  // without spending a query). It is a fast-fail — EmployeeService.create makes
+  // the authoritative check inside its transaction.
   router.post(
     '/',
     requirePermission('employee:create'),
     validate({ body: createEmployeeSchema }),
+    guard.limit('maxEmployees'),
     (req, res, next) => {
       void (async () => {
         try {
@@ -92,6 +102,11 @@ export function buildEmployeeRouter(deps: Deps) {
   router.post(
     '/bulk-import',
     requirePermission('employee:create'),
+    // Before uploadSingle: an at-capacity tenant is refused without us reading a
+    // 5 MB body first. It can only assert "at least one seat free" — the row
+    // count is unknown until parseUpload — so BulkImportService does the real
+    // batch pre-flight once N is known.
+    guard.limit('maxEmployees'),
     uploadSingle('file'),
     (req, res, next) => {
       void (async () => {

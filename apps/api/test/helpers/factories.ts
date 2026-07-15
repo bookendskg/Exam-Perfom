@@ -92,3 +92,58 @@ export async function makeUser(opts: MakeUserOptions = {}) {
 export async function resetOutletManagers(): Promise<void> {
   await testDb().outlet.updateMany({ data: { managerId: null } })
 }
+
+/**
+ * Puts the tenant on one of the seeded plans (starter | professional | enterprise).
+ *
+ * All three exist in every run — globalSetup seeds them. The anchor defaults to
+ * professional, and truncateAll() puts it back, so a test may downgrade freely.
+ *
+ * Takes effect on the very next request: nothing caches the plan, by design.
+ */
+export async function usePlan(code: string, tenantId = testTenantId()): Promise<void> {
+  const plan = await testDb().plan.findUniqueOrThrow({ where: { code } })
+  await testDb().tenant.update({ where: { id: tenantId }, data: { planId: plan.id } })
+}
+
+/**
+ * Puts the tenant on a throwaway plan with exactly the limits under test.
+ *
+ * Better than the seeded tiers for edge cases — asserting the boundary at 50
+ * means creating 50 employees, whereas a plan with maxEmployees: 1 asserts the
+ * same arithmetic in two rows. truncateAll() deletes plans it does not
+ * recognise, so these do not leak.
+ */
+export async function useCustomPlan(
+  limits: {
+    maxEmployees?: number | null
+    maxOutlets?: number | null
+    maxQuestions?: number | null
+    maxExamsPerMonth?: number | null
+    questionTypes?: string[]
+    autoScheduling?: boolean
+  },
+  tenantId = testTenantId()
+): Promise<string> {
+  const code = `test-plan-${planCounter++}`
+  const plan = await testDb().plan.create({
+    data: {
+      code,
+      name: code,
+      // Spread AFTER the defaults so an explicit `null` (unlimited) survives —
+      // `?? null` on each would work too, but this way a limit the test does not
+      // mention stays unlimited rather than silently becoming zero.
+      maxEmployees: null,
+      maxOutlets: null,
+      maxQuestions: null,
+      maxExamsPerMonth: null,
+      questionTypes: ['mcq', 'theory', 'video_image'],
+      autoScheduling: true,
+      ...limits,
+    },
+  })
+  await testDb().tenant.update({ where: { id: tenantId }, data: { planId: plan.id } })
+  return plan.id
+}
+
+let planCounter = 1

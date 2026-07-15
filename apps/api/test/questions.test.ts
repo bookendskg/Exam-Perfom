@@ -3,7 +3,7 @@ import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
 import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
-import { makeUser } from './helpers/factories.js'
+import { makeUser, usePlan } from './helpers/factories.js'
 
 let app: Application
 let ctx: {
@@ -178,10 +178,36 @@ describe('§10.1 theory validation', () => {
 })
 
 describe('§10.1 video/image validation', () => {
+  /**
+   * On Enterprise, because §4.1's plan matrix reserves video_image for it —
+   * Professional is MCQ + Theory only, and the anchor tenant defaults to
+   * Professional. These tests are about §10.1's rubric rules, not about plans,
+   * so they buy the tier that lets them ask the question.
+   *
+   * Worth noting the tension this exposes: Bookends uses all three question
+   * types (§10.1 is theirs) but has 300 employees, which is exactly
+   * Professional's ceiling. Under the matrix as written, their own feature set
+   * requires Enterprise. That is a pricing question, not a code one.
+   */
+  beforeEach(async () => {
+    await usePlan('enterprise')
+  })
+
   it('creates a video/image question with a rubric', async () => {
     const { token } = await tokenFor({ role: 'admin' })
     const res = await create(token, videoImage())
     expect(res.status).toBe(201)
+  })
+
+  it('is refused outright on a plan that does not include the type (§4.3)', async () => {
+    await usePlan('professional')
+    const { token } = await tokenFor({ role: 'admin' })
+
+    const res = await create(token, videoImage())
+    expect(res.status).toBe(403)
+    // Not PLAN_LIMIT_REACHED: they have not run out of anything, the tier
+    // simply does not sell this.
+    expect(res.body.error.code).toBe('PLAN_FEATURE_LOCKED')
   })
 
   it('requires a rubric — without one it cannot be graded', async () => {

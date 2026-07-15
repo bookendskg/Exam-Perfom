@@ -323,11 +323,40 @@ model Tenant {
   @@map("tenants")
 }
 
-/// Per-billing-period usage counters (§4.2), one row per tenant per month.
+/// Per-billing-period usage (§4.2), one row per tenant per month.
 ///
-/// Counters rather than COUNT(*) at read time: planGuard runs on every create,
-/// and counting 300 employees on each one is a query the limit check does not
-/// need. Recomputed by the usage job; incremented inline on the hot paths.
+/// The BILLING RECORD, and the meter for quantities that cannot be counted.
+/// NOT planGuard's read path — planGuard does not read this table at all.
+///
+/// storageBytes, whatsappMessages and aiRequests are authoritative here because
+/// there is nothing to recount: no size column exists in this schema, and a
+/// message sent last month is not a row, it is a thing that happened. These are
+/// metered at the point of consumption — not for speed, for want of anything to
+/// count. (None of them have a producer yet; the columns are waiting for one.)
+///
+/// activeEmployees / activeOutlets / totalQuestions / examsConducted are row
+/// counts, written here by the usage job as a CLOSING SNAPSHOT — an invoice
+/// needs what was true in March, and a live count only knows today. planGuard
+/// counts live instead and must not read these.
+///
+/// billingPeriod is *why* enforcement cannot live on these columns. A stock does
+/// not reset in a new month, but a per-period row does: on the 1st the row does
+/// not exist yet, activeEmployees reads as its default 0, and every limit stops
+/// enforcing until the job runs. That fails open, silently, monthly.
+///
+/// (An earlier version of this comment argued the opposite — that counters were
+/// needed because "planGuard runs on every create". It does not: planGuard is
+/// middleware, so it runs once per request, and a bulk import is one request for
+/// 200 rows. Measured on this schema's indexes, a live COUNT is ~0.2-0.6ms
+/// against a counter read *plus* the increment it forces — the counter was
+/// slower, on the path it existed to speed up, in a request that already waits
+/// ~130ms for argon2. Unlike ExamCodeCounter and Outlet.lastEmployeeSeq, which
+/// are counters because a sequence's gaps must persist and cannot be recomputed,
+/// these are derived data — and a counter over derived data is a cache that
+/// mis-bills. If COUNT(*) ever does become the bottleneck, the fix is a Postgres
+/// trigger: it runs inside the writer's transaction, so it sees rollbacks and
+/// the ON DELETE CASCADE from users to employees. An app-level counter sees
+/// neither.)
 model TenantUsage {
   id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tenantId String @map("tenant_id") @db.Uuid

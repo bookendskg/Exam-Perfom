@@ -2,9 +2,11 @@ import {
   ANCHOR_TENANT,
   createPrismaClient,
   seedReferenceData,
+  seedTenant,
   SEED_OUTLETS,
   SEED_DEPARTMENTS,
   SEED_DESIGNATIONS,
+  SEED_PLANS,
   type PrismaClient,
 } from '@bookends/db'
 
@@ -68,6 +70,12 @@ const MUTABLE_TABLES = [
   'exam_sessions',
   'exam_assignments',
   'exam_questions',
+  // Both of these leaked before, and both leak in the way that is hardest to
+  // see: a config left behind makes the auto-scheduler do twice the work in a
+  // LATER file, and a counter left behind makes exam codes depend on which
+  // tests ran first. Same reason last_employee_seq is reset below.
+  'exam_schedule_config',
+  'exam_code_counters',
   'exams',
   'exam_templates',
   'question_reviews',
@@ -139,7 +147,35 @@ export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void
   // Safe to run after the deletes above: those already removed the child rows
   // (their outlets and departments do not carry seeded codes), so nothing
   // references these tenants by the time they go.
+  // Drop every tenant a test invented, and everything hanging off them.
+  //
+  // The org rows must go by TENANT, not by code. The deletes above key on
+  // "code not in the seeded list", which was right when there was one tenant and
+  // is wrong now: a second tenant reusing "AK" is the whole point of per-tenant
+  // uniqueness, so its outlet survives the code rule and then blocks its own
+  // tenant's delete on a foreign key. Leaf-first, same as MUTABLE_TABLES.
+  const anchorId = testTenantId()
+  const foreign = { tenantId: { not: anchorId } }
+  await prisma.outletDepartment.deleteMany({ where: foreign })
+  await prisma.designation.deleteMany({ where: foreign })
+  await prisma.department.deleteMany({ where: foreign })
+  await prisma.outlet.deleteMany({ where: foreign })
   await prisma.tenant.deleteMany({ where: { slug: { not: ANCHOR_TENANT.slug } } })
+
+  // Restore the anchor's PLAN, and drop any plan a test invented.
+  //
+  // Same restore-not-preserve philosophy as the reference data below, and for a
+  // sharper reason: a plan-limit test downgrades the anchor to `starter` to
+  // assert a 403, and without this it stays on starter for every later test —
+  // which then fail, or worse pass, depending on file order. vitest reorders
+  // files from its timing cache, so that surfaces as a suite that is green once
+  // and red the next run with nothing changed. This file has been bitten by
+  // exactly that once already (see the tenant.deleteMany above).
+  //
+  // seedTenant upserts planId back to professional and subscriptionStatus back
+  // to active.
+  await seedTenant(prisma, ANCHOR_TENANT)
+  await prisma.plan.deleteMany({ where: { code: { notIn: SEED_PLANS.map((p) => p.code) } } })
 
   // Restores isActive, names, levels and the outlet/department mappings that a
   // test may have changed or deleted.

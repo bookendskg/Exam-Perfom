@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from '@bookends/db'
+import { isFeatureAllowed, remainingCapacity } from '@bookends/core'
 import type { ZodError } from 'zod'
 import type { Principal } from '../../infra/session-store/index.js'
+import type { PlanService } from '../../plans/plan.service.js'
 import type { RawRow } from '../../bulk-import/parse.js'
 import { createQuestionSchema } from '../question.schemas.js'
 import { loadQuestionLookup, mapQuestionRow, type RowError } from './question-row.js'
@@ -33,7 +35,10 @@ export interface QuestionImportReport {
  * approving 200 questions by uploading a file would defeat the workflow.
  */
 export class QuestionImportService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly plans: PlanService
+  ) {}
 
   async run(
     principal: Principal,
@@ -41,6 +46,9 @@ export class QuestionImportService {
     options: { dryRun: boolean }
   ): Promise<QuestionImportReport> {
     const lookup = await loadQuestionLookup(this.prisma)
+
+    // Read once per file, not per row.
+    const plan = await this.plans.forTenant(principal.tenantId)
 
     const results: QuestionRowResult[] = []
     const importable: Array<{ result: QuestionRowResult; data: Record<string, unknown> }> = []
@@ -59,6 +67,14 @@ export class QuestionImportService {
         const parsed = createQuestionSchema.safeParse(mapped.input)
         if (!parsed.success) {
           result.errors.push(...zodRowErrors(parsed.error))
+        } else if (!isFeatureAllowed(plan.questionTypes, parsed.data.type)) {
+          // A row error, not a thrown 403: a Starter tenant's file of 50 MCQs
+          // with two stray theory rows should import 48, and be told precisely
+          // which two were refused and why.
+          result.errors.push({
+            field: 'type',
+            message: `The ${plan.planCode} plan does not include ${parsed.data.type} questions (allowed: ${plan.questionTypes.join(', ')})`,
+          })
         } else {
           importable.push({ result, data: parsed.data as unknown as Record<string, unknown> })
           if (mapped.input['questionTextHi']) translations.hi++
@@ -79,9 +95,41 @@ export class QuestionImportService {
       rows: results,
     }
 
+    /**
+     * §4.3 capacity, spent down row by row.
+     *
+     * Deliberately NOT the employee importer's hard-fail. The asymmetry is the
+     * point and it is not an oversight: questions are fungible and their rows
+     * independent, so importing the first 380 of 500 is a coherent outcome and
+     * the tenant keeps the work. People are not fungible — "which 50 of your 60
+     * new hires exist" has no defensible answer, so that file is refused whole.
+     *
+     * Computed before the dryRun return so the preview tells the truth about
+     * which rows a real run would reject.
+     */
+    let remaining = remainingCapacity(
+      plan.maxQuestions,
+      await this.plans.currentUsage('maxQuestions', principal.tenantId)
+    )
+
+    const withinCapacity: typeof importable = []
+    for (const entry of importable) {
+      if (remaining > 0) {
+        remaining--
+        withinCapacity.push(entry)
+        continue
+      }
+      entry.result.errors.push({
+        field: 'row',
+        message: `Your plan allows ${plan.maxQuestions} questions and you are at the limit`,
+      })
+      report.valid--
+      report.invalid++
+    }
+
     if (options.dryRun) return report
 
-    for (const { result, data } of importable) {
+    for (const { result, data } of withinCapacity) {
       try {
         const created = await this.insertOne(principal, data)
         result.questionId = created.id
