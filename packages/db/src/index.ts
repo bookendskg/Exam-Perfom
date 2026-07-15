@@ -21,3 +21,5 @@ export function createPrismaClient(url?: string): PrismaClient {
 }
 
 export * from './seed-data.js'
+export * from './tenant-context.js'
+export * from './tenant.js'

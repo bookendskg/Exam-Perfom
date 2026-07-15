@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 /**
@@ -38,7 +38,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status, `login failed: ${JSON.stringify(res.body)}`).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }

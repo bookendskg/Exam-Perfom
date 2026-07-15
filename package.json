@@ -2,7 +2,7 @@
   "name": "bookends-portal",
   "version": "0.1.0",
   "private": true,
-  "description": "Bookends Hospitality \u2014 Staff Performance & Examination Portal",
+  "description": "Bookends Hospitality — Staff Performance & Examination Portal",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -37,5 +37,13 @@
     "typescript-eslint": "^8.18.0",
     "vitest": "^2.1.8",
     "embedded-postgres": "^17.5.0-beta.15"
+  },
+  "allowScripts": {
+    "@embedded-postgres/windows-x64@17.5.0-beta.15": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.28.1": true,
+    "prisma@6.19.3": true
   }
 }

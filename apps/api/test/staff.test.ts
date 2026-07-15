@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 let app: Application
@@ -26,7 +26,7 @@ async function staffToken(over: Parameters<typeof makeUser>[0] = {}) {
   })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -77,7 +77,7 @@ describe('§5.3 GET /staff/profile', () => {
     const made = await makeUser({ role: 'super_admin', mustChangePassword: false })
     const login = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: made.phone, password: made.password })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
 
     const res = await get('/profile', login.body.data.accessToken)
     expect(res.status).toBe(404)
@@ -92,7 +92,7 @@ describe('§5.3 GET /staff/profile', () => {
     const made = await makeUser({ role: 'staff', withEmployee: true, mustChangePassword: true })
     const login = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: made.phone, password: made.password })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
 
     const res = await get('/profile', login.body.data.accessToken)
     expect(res.status).toBe(403)
@@ -138,9 +138,9 @@ describe('§8.5 GET /staff/dashboard', () => {
 
     await testDb().notification.createMany({
       data: [
-        { userId: user.id, type: 'system', title: 'Yours', body: 'x', isRead: false },
-        { userId: user.id, type: 'system', title: 'Read', body: 'x', isRead: true },
-        { userId: other.user.id, type: 'system', title: 'Theirs', body: 'x', isRead: false },
+        { tenantId: testTenantId(), userId: user.id, type: 'system', title: 'Yours', body: 'x', isRead: false },
+        { tenantId: testTenantId(), userId: user.id, type: 'system', title: 'Read', body: 'x', isRead: true },
+        { tenantId: testTenantId(), userId: other.user.id, type: 'system', title: 'Theirs', body: 'x', isRead: false },
       ],
     })
 
@@ -157,8 +157,8 @@ describe('§8.5 GET /staff/dashboard', () => {
 
     await testDb().certificate.createMany({
       data: [
-        { employeeId: mine.id, type: 'monthly', title: 'Mine' },
-        { employeeId: theirs.id, type: 'monthly', title: 'Theirs' },
+        { tenantId: testTenantId(), employeeId: mine.id, type: 'monthly', title: 'Mine' },
+        { tenantId: testTenantId(), employeeId: theirs.id, type: 'monthly', title: 'Theirs' },
       ],
     })
 
@@ -175,6 +175,7 @@ describe('§8.5 GET /staff/performance', () => {
     // 8 months of history; §8.5 asks for the last 6.
     await testDb().performanceSnapshot.createMany({
       data: Array.from({ length: 8 }, (_, i) => ({
+        tenantId: testTenantId(),
         employeeId: employee.id,
         year: 2026,
         month: i + 1,
@@ -195,7 +196,7 @@ describe('§8.5 GET /staff/performance', () => {
     const theirs = await testDb().employee.findFirstOrThrow({ where: { userId: other.user.id } })
 
     await testDb().performanceSnapshot.create({
-      data: { employeeId: theirs.id, year: 2026, month: 1, averageScore: 99 },
+      data: { tenantId: testTenantId(), employeeId: theirs.id, year: 2026, month: 1, averageScore: 99 },
     })
 
     const res = await get('/performance', token)

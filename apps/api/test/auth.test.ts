@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp, type TestHarness } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser, resetOutletManagers } from './helpers/factories.js'
 
 let harness: TestHarness
@@ -13,7 +13,7 @@ const login = (phone: string, password: string, deviceInfo?: object) =>
     .post('/api/v1/auth/login')
     // supertest sends no User-Agent unless asked; real clients always do.
     .set('User-Agent', deviceInfo ? 'BookendsApp/1.0 (Android)' : 'Mozilla/5.0')
-    .send({ phone, password, ...(deviceInfo ? { deviceInfo } : {}) })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone, password, ...(deviceInfo ? { deviceInfo } : {}) })
 
 beforeEach(async () => {
   await truncateAll()
@@ -120,7 +120,7 @@ describe('POST /auth/login (§5.3, §7.1)', () => {
   })
 
   it('rejects a malformed body with §5.2 details[]', async () => {
-    const res = await request(app).post('/api/v1/auth/login').send({ phone: '' })
+    const res = await request(app).post('/api/v1/auth/login').send({ tenantSlug: TEST_TENANT_SLUG, phone: '' })
 
     expect(res.status).toBe(400)
     expect(res.body.error.code).toBe('VALIDATION_ERROR')
@@ -363,7 +363,7 @@ describe('authenticate middleware', () => {
   it('rejects a token signed with the wrong secret', async () => {
     const other = buildTestApp({ JWT_SECRET: 'a-completely-different-secret-of-sufficient-length' })
     const { phone, password } = await makeUser()
-    const res = await request(other.app).post('/api/v1/auth/login').send({ phone, password })
+    const res = await request(other.app).post('/api/v1/auth/login').send({ tenantSlug: TEST_TENANT_SLUG, phone, password })
 
     // Issued by an app with a different signing key — this one must refuse it.
     const mine = await request(app)

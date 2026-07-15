@@ -1,7 +1,7 @@
-import { Router, type RequestHandler } from 'express'
-import multer, { MulterError } from 'multer'
+import { Router } from 'express'
 import { ok, type Language } from '@bookends/core'
 import type { Deps } from '../app.js'
+import { singleFileUpload } from '../http/middleware/upload.js'
 import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
@@ -48,31 +48,10 @@ export function buildQuestionRouters(deps: Deps) {
   const documents = new SourceDocumentService(deps.prisma)
   const importer = new QuestionImportService(deps.prisma)
 
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  })
-
-  /** Translates multer's errors into the §5.2 envelope. */
-  const uploadSingle = (field: string): RequestHandler => {
-    const handler = upload.single(field)
-    return (req, res, next) => {
-      handler(req, res, (err: unknown) => {
-        if (err instanceof MulterError) {
-          next(
-            ApiError.validation(
-              err.code === 'LIMIT_FILE_SIZE'
-                ? 'The file is too large'
-                : 'Could not read the upload',
-              [{ field: err.field ?? 'file', message: err.code }]
-            )
-          )
-          return
-        }
-        next(err)
-      })
-    }
-  }
+  // Shared with the employee importer. Beyond deduplicating the multer error
+  // translation, the shared version is what preserves the tenant context across
+  // the upload — see its docblock.
+  const uploadSingle = (field: string) => singleFileUpload(field)
 
   const scopeOf = (req: { scope?: 'all' | 'own_outlet' | 'own_resource' | 'none' }) => {
     if (!req.scope) throw ApiError.forbidden()

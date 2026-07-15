@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import type { Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
@@ -59,7 +60,12 @@ export class OutletService {
   async create(input: CreateOutletInput) {
     if (input.managerId) await this.assertAssignableManager(input.managerId)
 
-    const existing = await this.prisma.outlet.findUnique({ where: { code: input.code } })
+    // Per tenant: "AK" being taken at another customer is not this tenant's
+    // problem, and reporting it as a conflict would leak that they exist.
+    const tenantId = currentTenantId()
+    const existing = await this.prisma.outlet.findUnique({
+      where: { tenantId_code: { tenantId, code: input.code } },
+    })
     if (existing) {
       throw ApiError.conflict('That outlet code is already in use', [
         { field: 'code', message: `"${input.code}" belongs to ${existing.name}` },
@@ -68,6 +74,7 @@ export class OutletService {
 
     const outlet = await this.prisma.outlet.create({
       data: {
+        tenantId,
         name: input.name,
         code: input.code,
         address: input.address ?? null,

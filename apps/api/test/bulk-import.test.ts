@@ -3,7 +3,7 @@ import request from 'supertest'
 import type { Application } from 'express'
 import ExcelJS from 'exceljs'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb, testTenantId, TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 let app: Application
@@ -21,7 +21,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return res.body.data.accessToken as string
 }
@@ -239,7 +239,12 @@ describe('§8.3 bulk import — partial import', () => {
     expect(await testDb().employee.count()).toBe(2)
 
     // The bad row wrote nothing at all — not a partial user record.
-    expect(await testDb().user.findUnique({ where: { phone: '9812000002' } })).toBeNull()
+    // Keyed on (tenant, phone): phone alone is no longer unique platform-wide.
+    expect(
+      await testDb().user.findUnique({
+        where: { tenantId_phone: { tenantId: testTenantId(), phone: '9812000002' } },
+      })
+    ).toBeNull()
   })
 
   it('reports the code and one-time password for each imported row', async () => {
@@ -257,7 +262,7 @@ describe('§8.3 bulk import — partial import', () => {
 
     const login = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: '9812200042', password: '0042book' })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: '9812200042', password: '0042book' })
 
     expect(login.status).toBe(200)
     expect(login.body.data.mustChangePassword).toBe(true)

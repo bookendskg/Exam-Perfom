@@ -105,7 +105,10 @@ export class QuestionImportService {
       data: {
         ...(data as unknown as Prisma.QuestionUncheckedCreateInput),
         // Named explicitly so the compiler can confirm the NOT NULL columns are
-        // written, rather than trusting an untyped bag of keys.
+        // written, rather than trusting an untyped bag of keys. The cast above
+        // hides tenantId's absence from the compiler entirely, so it must be
+        // stated here.
+        tenantId: principal.tenantId,
         type: data['type'] as Prisma.QuestionUncheckedCreateInput['type'],
         departmentId: data['departmentId'] as string,
         questionTextEn: data['questionTextEn'] as string,

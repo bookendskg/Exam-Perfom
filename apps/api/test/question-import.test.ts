@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 let app: Application
@@ -14,12 +14,12 @@ beforeEach(async () => {
   const db = testDb()
   const kitchen = await db.department.findFirstOrThrow({ where: { code: 'KIT' } })
   await db.sourceDocument.create({
-    data: { title: 'Food Safety Manual', type: 'sop', departmentId: kitchen.id },
+    data: { tenantId: testTenantId(), title: 'Food Safety Manual', type: 'sop', departmentId: kitchen.id },
   })
-  await db.topic.create({ data: { nameEn: 'Food Safety', departmentId: kitchen.id } })
+  await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id } })
   // A topic in another department, for the coherence check.
   const service = await db.department.findFirstOrThrow({ where: { code: 'SRV' } })
-  await db.topic.create({ data: { nameEn: 'Guest Greeting', departmentId: service.id } })
+  await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Guest Greeting', departmentId: service.id } })
 })
 
 afterAll(async () => {
@@ -30,7 +30,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return res.body.data.accessToken as string
 }

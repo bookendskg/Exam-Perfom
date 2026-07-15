@@ -7,14 +7,21 @@
  */
 import { PrismaClient, Role } from '@prisma/client'
 import { hashPassword, validatePassword } from '@bookends/core'
-import { seedReferenceData } from '../src/seed-data.js'
+import { ANCHOR_TENANT, seedPlans, seedReferenceData, seedTenant } from '../src/seed-data.js'
 
 const prisma = new PrismaClient()
 
 async function main() {
+  console.log('Seeding subscription plans…')
+  console.log(`  plans: ${await seedPlans(prisma)}`)
+
+  // The reference data below is Bookends', so it needs Bookends to exist first.
+  const tenantId = await seedTenant(prisma, ANCHOR_TENANT)
+  console.log(`  tenant: ${ANCHOR_TENANT.slug} (${tenantId})`)
+
   console.log('Seeding organisational reference data…')
 
-  const counts = await seedReferenceData(prisma)
+  const counts = await seedReferenceData(prisma, tenantId)
   console.log(`  outlets:      ${counts.outlets}`)
   console.log(`  departments:  ${counts.departments}`)
   console.log(`  designations: ${counts.designations}`)
@@ -38,8 +45,10 @@ async function main() {
     // SEED_ADMIN_PASSWORD would do nothing, and an account seeded under the old
     // scrypt hasher could never be healed by re-running the seed.
     const passwordHash = await hashPassword(bootstrapPassword)
+    // Keyed on (tenant, phone) now: the same number may be a super admin at one
+    // customer and a line cook at another.
     await prisma.user.upsert({
-      where: { phone: bootstrapPhone },
+      where: { tenantId_phone: { tenantId, phone: bootstrapPhone } },
       update: {
         passwordHash,
         role: Role.super_admin,
@@ -47,6 +56,7 @@ async function main() {
         mustChangePassword: true,
       },
       create: {
+        tenantId,
         phone: bootstrapPhone,
         role: Role.super_admin,
         passwordHash,

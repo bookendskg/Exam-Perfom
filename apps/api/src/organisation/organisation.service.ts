@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import { ApiError } from '../http/api-error.js'
 import type {
   CreateDepartmentInput,
@@ -34,6 +35,7 @@ export class OrganisationService {
 
     return this.prisma.department.create({
       data: {
+        tenantId: currentTenantId(),
         name: input.name,
         code: input.code,
         description: input.description ?? null,
@@ -100,6 +102,7 @@ export class OrganisationService {
 
     return this.prisma.designation.create({
       data: {
+        tenantId: currentTenantId(),
         name: input.name,
         code: input.code,
         departmentId: input.departmentId ?? null,
@@ -178,10 +181,13 @@ export class OrganisationService {
    * Inactive rows still hold their code — codes are not recycled.
    */
   private async assertCodeFree(kind: 'department' | 'designation', code: string): Promise<void> {
+    // Free *within this tenant*. Another customer already using "KIT" is not a
+    // conflict — that is the entire point of the composite unique constraint.
+    const tenantId = currentTenantId()
     const existing =
       kind === 'department'
-        ? await this.prisma.department.findUnique({ where: { code } })
-        : await this.prisma.designation.findUnique({ where: { code } })
+        ? await this.prisma.department.findUnique({ where: { tenantId_code: { tenantId, code } } })
+        : await this.prisma.designation.findUnique({ where: { tenantId_code: { tenantId, code } } })
 
     if (existing) {
       throw ApiError.conflict(`That ${kind} code is already in use`, [

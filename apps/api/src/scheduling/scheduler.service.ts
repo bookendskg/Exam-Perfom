@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId, runAsPlatform, runInTenant } from '@bookends/db'
 import type { Logger } from 'pino'
 import { ExamService } from '../exams/exam.service.js'
 import type { Principal } from '../infra/session-store/index.js'
@@ -52,11 +53,61 @@ export class SchedulerService {
    * `now` is injected rather than read from the clock so this can be tested at
    * any date without waiting for the 1st of a month.
    */
+  /**
+   * Runs auto-scheduling for every eligible tenant.
+   *
+   * A job, not a request, so there is no ambient tenant to inherit — it has to
+   * enumerate them and enter each one explicitly. Doing that per tenant, rather
+   * than sweeping every config at once as the single-tenant version did, is
+   * what keeps one customer's cron from touching another's exams: inside
+   * runInTenant every query below is filtered, so the blast radius of a bug
+   * here is one tenant instead of all of them.
+   */
   async run(now: Date = new Date()): Promise<SchedulingRun> {
     // §12.2 fires at 00:00 IST, when UTC is still the previous month. Reading
     // the month in IST is what stops every exam being scheduled a month early.
     const { year, month } = istMonthOf(now)
 
+    const tenants = await runAsPlatform('auto-scheduler: enumerating tenants to run for', () =>
+      this.prisma.tenant.findMany({
+        where: { isActive: true, deletedAt: null },
+        select: { id: true, slug: true, plan: { select: { autoScheduling: true } } },
+      })
+    )
+
+    const results: OutletScheduleResult[] = []
+
+    for (const tenant of tenants) {
+      // §7: auto-scheduling is Professional and above. Enforced here as well as
+      // at the API, because the job is the other door into the same feature —
+      // gating only the settings page would let a downgraded tenant keep the
+      // benefit indefinitely.
+      if (!tenant.plan?.autoScheduling) {
+        this.logger.debug(
+          { tenantSlug: tenant.slug },
+          'Skipping auto-scheduling: plan does not include it'
+        )
+        continue
+      }
+
+      results.push(...(await runInTenant(tenant.id, () => this.runForTenant(year, month))))
+    }
+
+    const run: SchedulingRun = {
+      year,
+      month,
+      results,
+      scheduled: results.filter((r) => r.status === 'scheduled').length,
+      conflicts: results.filter((r) => r.status === 'conflict').length,
+      failed: results.filter((r) => r.status === 'failed').length,
+    }
+
+    this.logger.info({ run }, 'Auto-scheduling complete')
+    return run
+  }
+
+  /** One tenant's worth of scheduling. Every query here is tenant-filtered. */
+  private async runForTenant(year: number, month: number): Promise<OutletScheduleResult[]> {
     const configs = await this.prisma.examScheduleConfig.findMany({
       where: { isActive: true },
       include: { outlet: true, template: true },
@@ -64,7 +115,7 @@ export class SchedulerService {
 
     if (configs.length === 0) {
       this.logger.warn('Auto-scheduling ran with no active configuration; nothing to do')
-      return { year, month, results: [], scheduled: 0, conflicts: 0, failed: 0 }
+      return []
     }
 
     const results: OutletScheduleResult[] = []
@@ -86,17 +137,7 @@ export class SchedulerService {
       }
     }
 
-    const run: SchedulingRun = {
-      year,
-      month,
-      results,
-      scheduled: results.filter((r) => r.status === 'scheduled').length,
-      conflicts: results.filter((r) => r.status === 'conflict').length,
-      failed: results.filter((r) => r.status === 'failed').length,
-    }
-
-    this.logger.info({ run }, 'Auto-scheduling complete')
-    return run
+    return results
   }
 
   private async scheduleForOutlet(
@@ -170,6 +211,9 @@ export class SchedulerService {
       // borrows 'all' scope — this is not a request and no user is present.
       const principal: Principal = {
         userId: await this.systemUserId(),
+        // The ambient scope set by run(); systemUserId() resolved inside it too,
+        // so the borrowed admin is guaranteed to be this tenant's own.
+        tenantId: currentTenantId(),
         role: 'admin',
         sessionId: 'auto-scheduler',
         employeeId: null,

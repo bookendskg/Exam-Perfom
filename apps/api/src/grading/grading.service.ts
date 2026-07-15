@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import { pageMeta, type Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import type { Principal } from '../infra/session-store/index.js'
@@ -278,6 +279,7 @@ export class GradingService {
       // history, which is what §1.2 says the product is actually for.
       await tx.employeeTimeline.create({
         data: {
+          tenantId: currentTenantId(),
           employeeId: assignment.employeeId,
           eventType: 'exam',
           title: `${assignment.exam.examCode}: ${result.grade} (${percentage.toFixed(1)}%)`,

@@ -51,6 +51,11 @@ export const ERROR_CODES = [
   'RATE_LIMITED',
   'NOT_IMPLEMENTED',
   'INTERNAL_ERROR',
+  // SaaS Appendix B.
+  'TENANT_NOT_FOUND',
+  'TENANT_SUSPENDED',
+  'PLAN_LIMIT_REACHED',
+  'PLAN_FEATURE_LOCKED',
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

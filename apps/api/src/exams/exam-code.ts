@@ -39,14 +39,20 @@ export function parseExamCode(
  */
 export async function claimExamCode(
   tx: Prisma.TransactionClient,
+  tenantId: string,
   scheduledDate: Date
 ): Promise<string> {
   const period = periodOf(scheduledDate)
 
+  // Raw SQL, invisible to the tenant extension: the tenant_id here is written
+  // by hand and must stay. The counter is keyed (tenant_id, period) — without
+  // the column in both the INSERT and the ON CONFLICT target, every tenant
+  // would share one sequence, so Bookends scheduling an exam would advance
+  // Hotel Sunrise's numbering and leak our exam volume through the gaps.
   const rows = await tx.$queryRaw<Array<{ last_seq: number }>>`
-    INSERT INTO exam_code_counters (period, last_seq)
-         VALUES (${period}, 1)
-    ON CONFLICT (period)
+    INSERT INTO exam_code_counters (tenant_id, period, last_seq)
+         VALUES (${tenantId}::uuid, ${period}, 1)
+    ON CONFLICT (tenant_id, period)
       DO UPDATE SET last_seq = exam_code_counters.last_seq + 1
       RETURNING last_seq
   `

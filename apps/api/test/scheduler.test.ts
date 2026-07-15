@@ -3,7 +3,7 @@ import request from 'supertest'
 import { pino } from 'pino'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { SchedulerService } from '../src/scheduling/scheduler.service.js'
 
@@ -27,7 +27,7 @@ beforeEach(async () => {
     db.outlet.findFirstOrThrow({ where: { code: 'CP' } }),
     db.outlet.findFirstOrThrow({ where: { code: 'PR' } }),
   ])
-  const topic = await db.topic.create({ data: { nameEn: 'Food Safety', departmentId: kitchen.id } })
+  const topic = await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id } })
 
   ctx = { kitchen: kitchen.id, aiko: aiko.id, capiche: capiche.id, prep: prep.id, topic: topic.id }
 })
@@ -40,7 +40,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -51,7 +51,7 @@ async function seedApprovedQuestions(count: number) {
   const author = await testDb().user.findFirstOrThrow()
   for (let i = 0; i < count; i++) {
     await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         difficulty: 'easy',
         topicId: ctx.topic,
@@ -75,7 +75,7 @@ async function seedApprovedQuestions(count: number) {
 async function makeTemplate(over: Record<string, unknown> = {}) {
   const author = await testDb().user.findFirstOrThrow()
   return testDb().examTemplate.create({
-    data: {
+    data: { tenantId: testTenantId(),
       nameEn: 'Monthly Staff Exam',
       totalMarks: 5,
       durationMinutes: 60,
@@ -88,7 +88,7 @@ async function makeTemplate(over: Record<string, unknown> = {}) {
 
 async function makeConfig(templateId: string, over: Record<string, unknown> = {}) {
   return testDb().examScheduleConfig.create({
-    data: { dayOfMonth: 15, fallbackRule: 'next_monday', templateId, ...over },
+    data: { tenantId: testTenantId(), dayOfMonth: 15, fallbackRule: 'next_monday', templateId, ...over },
   })
 }
 
@@ -177,7 +177,7 @@ describe('§12.2 step 4-6 conflict handling', () => {
     // An admin already scheduled something that day.
     const author = await testDb().user.findFirstOrThrow()
     await testDb().exam.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examCode: 'EX-MANUAL-1',
         nameEn: 'Manually scheduled',
         scheduledDate: new Date('2027-03-15T00:00:00.000Z'),

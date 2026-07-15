@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { seededShuffle } from '../src/staff-exams/shuffle.js'
 import { gradeFor } from '../src/staff-exams/staff-exam.service.js'
@@ -21,7 +21,7 @@ beforeEach(async () => {
     db.outlet.findFirstOrThrow({ where: { code: 'AK' } }),
   ])
   const author = await makeUser({ role: 'admin', mustChangePassword: false })
-  const topic = await db.topic.create({ data: { nameEn: 'Food Safety', departmentId: kitchen.id } })
+  const topic = await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id } })
 
   ctx = { kitchen: kitchen.id, aiko: aiko.id, topic: topic.id, authorId: author.user.id }
 })
@@ -39,7 +39,7 @@ async function staffToken() {
   })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   const employee = await testDb().employee.findFirstOrThrow({ where: { userId: made.user.id } })
   return { token: res.body.data.accessToken as string, employeeId: employee.id, ...made }
@@ -49,7 +49,7 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
 
 async function makeMcq(over: Record<string, unknown> = {}) {
   return testDb().question.create({
-    data: {
+    data: { tenantId: testTenantId(),
       type: 'mcq',
       difficulty: 'easy',
       topicId: ctx.topic,
@@ -74,7 +74,7 @@ async function makeMcq(over: Record<string, unknown> = {}) {
 
 async function makeTheory() {
   return testDb().question.create({
-    data: {
+    data: { tenantId: testTenantId(),
       type: 'theory',
       topicId: ctx.topic,
       departmentId: ctx.kitchen,
@@ -98,7 +98,7 @@ async function liveExam(
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
 
   const exam = await testDb().exam.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examCode: `EX-TEST-${Math.floor(Math.random() * 1_000_000)}`,
       nameEn: 'Monthly Kitchen Exam',
       scheduledDate: today,
@@ -119,6 +119,7 @@ async function liveExam(
   const questions = await testDb().question.findMany({ where: { id: { in: questionIds } } })
   await testDb().examQuestion.createMany({
     data: questionIds.map((id, i) => ({
+      tenantId: testTenantId(),
       examId: exam.id,
       questionId: id,
       sortOrder: i,
@@ -126,7 +127,7 @@ async function liveExam(
     })),
   })
 
-  await testDb().examAssignment.create({ data: { examId: exam.id, employeeId } })
+  await testDb().examAssignment.create({ data: { tenantId: testTenantId(), examId: exam.id, employeeId } })
   return exam
 }
 
@@ -172,7 +173,7 @@ describe('THE ANSWER KEY MUST NEVER REACH A CANDIDATE', () => {
   it('never returns the rubric of a video/image question', async () => {
     const staff = await staffToken()
     const q = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'video_image',
         topicId: ctx.topic,
         departmentId: ctx.kitchen,
@@ -638,7 +639,7 @@ describe('§3.2 — only staff take exams', () => {
       const made = await makeUser({ role, mustChangePassword: false })
       const login = await request(app)
         .post('/api/v1/auth/login')
-        .send({ phone: made.phone, password: made.password })
+        .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
 
       // An admin sitting an exam would pollute the performance record the
       // whole product exists to keep.

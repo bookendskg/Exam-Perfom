@@ -14,6 +14,16 @@ import { PostgresSessionStore } from './postgres-store.js'
  */
 export interface Principal {
   userId: string
+  /**
+   * The tenant this session belongs to (SaaS §2.3).
+   *
+   * Here rather than in the JWT, which is what the spec suggests. Same argument
+   * as the rest of this docblock, but with more at stake: a stale role claim
+   * over-grants inside one customer, while a stale tenant claim would read
+   * another customer's data outright. It rides the session, and every request
+   * re-reads it.
+   */
+  tenantId: string
   role: Role
   sessionId: string
   /** null for a User with no Employee row — e.g. the seeded super admin. */

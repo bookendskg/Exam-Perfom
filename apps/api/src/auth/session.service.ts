@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { runAsPlatform, runInTenant } from '@bookends/db'
 import { isStaffRole, type Role } from '@bookends/core'
 import type { Config } from '../config/env.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
@@ -45,12 +46,29 @@ export class SessionService {
    * simultaneous staff logins cannot both survive by interleaving their
    * revoke-then-insert.
    */
-  async issue(userId: string, role: Role, device: DeviceContext): Promise<IssuedSession> {
+  async issue(
+    tenantId: string,
+    userId: string,
+    role: Role,
+    device: DeviceContext
+  ): Promise<IssuedSession> {
     const { token: refreshToken, hash } = this.tokens.mintRefreshToken()
 
     const session = await this.prisma.$transaction(async (tx) => {
       // Serialises concurrent logins for this user.
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`
+      //
+      // Raw SQL, so the tenant extension cannot see it — the tenant_id filter
+      // here is written by hand and must stay. It is belt-and-braces rather
+      // than load-bearing (a user id is a UUID and already unique platform-wide),
+      // but an unqualified `FROM users` in a multi-tenant schema is exactly the
+      // shape that becomes a leak the day someone copies it somewhere it
+      // matters. Revisit once RLS lands and the database enforces this itself.
+      await tx.$queryRaw`
+        SELECT id FROM users
+         WHERE id = ${userId}::uuid
+           AND tenant_id = ${tenantId}::uuid
+           FOR UPDATE
+      `
 
       if (isStaffRole(role)) {
         await tx.userSession.updateMany({
@@ -61,6 +79,7 @@ export class SessionService {
 
       return tx.userSession.create({
         data: {
+          tenantId,
           userId,
           refreshTokenHash: hash,
           expiresAt: this.tokens.refreshExpiryDate(),
@@ -98,10 +117,16 @@ export class SessionService {
   async refresh(rawToken: string, device: DeviceContext): Promise<IssuedSession> {
     const hash = hashRefreshToken(rawToken)
 
-    const session = await this.prisma.userSession.findFirst({
-      where: { OR: [{ refreshTokenHash: hash }, { previousTokenHash: hash }] },
-      include: { user: true },
-    })
+    // Platform-scoped: /auth/refresh carries nothing but the token, so the
+    // tenant is unknown until this row is found — the lookup is what discovers
+    // it. Safe because refreshTokenHash is globally unique and is 256 bits of
+    // entropy that the client had to already possess.
+    const session = await runAsPlatform('refresh: keyed by a globally-unique opaque token', () =>
+      this.prisma.userSession.findFirst({
+        where: { OR: [{ refreshTokenHash: hash }, { previousTokenHash: hash }] },
+        include: { user: true },
+      })
+    )
 
     if (!session) throw ApiError.sessionExpired()
     if (session.revokedAt) throw ApiError.sessionExpired()
@@ -114,27 +139,35 @@ export class SessionService {
       if (Date.now() - rotatedAt > ROTATION_GRACE_MS) {
         // Outside the window this is a replay of a superseded token. Kill the
         // session rather than serve it.
-        await this.prisma.userSession.update({
-          where: { id: session.id },
-          data: { revokedAt: new Date(), revokedReason: 'token_replay' },
-        })
+        //
+        // The row told us its tenant, so from here on scope to it rather than
+        // stay on the platform escape hatch: these are ordinary tenant writes
+        // and should be guarded like any other.
+        await runInTenant(session.tenantId, () =>
+          this.prisma.userSession.update({
+            where: { id: session.id },
+            data: { revokedAt: new Date(), revokedReason: 'token_replay' },
+          })
+        )
         await this.store.delete(session.id)
         throw ApiError.sessionExpired()
       }
     }
 
     const { token: nextToken, hash: nextHash } = this.tokens.mintRefreshToken()
-    await this.prisma.userSession.update({
-      where: { id: session.id },
-      data: {
-        refreshTokenHash: nextHash,
-        previousTokenHash: session.refreshTokenHash,
-        rotatedAt: new Date(),
-        lastSeenAt: new Date(),
-        ipAddress: device.ipAddress ?? session.ipAddress,
-        userAgent: device.userAgent ?? session.userAgent,
-      },
-    })
+    await runInTenant(session.tenantId, () =>
+      this.prisma.userSession.update({
+        where: { id: session.id },
+        data: {
+          refreshTokenHash: nextHash,
+          previousTokenHash: session.refreshTokenHash,
+          rotatedAt: new Date(),
+          lastSeenAt: new Date(),
+          ipAddress: device.ipAddress ?? session.ipAddress,
+          userAgent: device.userAgent ?? session.userAgent,
+        },
+      })
+    )
 
     const role = session.user.role as Role
     const principal = await resolvePrincipal(this.prisma, session.userId, session.id)

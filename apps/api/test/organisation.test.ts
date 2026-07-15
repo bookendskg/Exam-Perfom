@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 let app: Application
@@ -20,7 +20,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status, `login failed: ${JSON.stringify(res.body)}`).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -72,7 +72,7 @@ describe('outlet manager assignment — closes the dead-role gap', () => {
     // A fresh login picks up the new scope.
     const relogin = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: manager.phone, password: manager.password })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: manager.phone, password: manager.password })
 
     const after = await request(app)
       .get('/api/v1/employees')
@@ -140,7 +140,7 @@ describe('outlet manager assignment — closes the dead-role gap', () => {
 
     const outgoingSession = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: outgoing.phone, password: outgoing.password })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: outgoing.phone, password: outgoing.password })
     await request(app)
       .get('/api/v1/employees')
       .set(auth(outgoingSession.body.data.accessToken))
@@ -198,7 +198,7 @@ describe('outlet manager assignment — closes the dead-role gap', () => {
 
     const relogin = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: manager.phone, password: manager.password })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: manager.phone, password: manager.password })
     const me = await request(app).get('/api/v1/auth/me').set(auth(relogin.body.data.accessToken))
 
     expect(me.body.data.managedOutletIds.sort()).toEqual([aiko.id, capiche.id].sort())

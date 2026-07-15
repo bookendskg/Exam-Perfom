@@ -78,4 +78,33 @@ export class ApiError extends Error {
   static notImplemented(message: string) {
     return new ApiError(501, 'NOT_IMPLEMENTED', message)
   }
+
+  /**
+   * Also used when the tenant exists but is suspended or soft-deleted, and when
+   * no tenant was named at all — for the same reason invalidCredentials() lumps
+   * its three causes together. Telling an unauthenticated caller "that
+   * organisation exists, but it is suspended" answers a question they have not
+   * earned the right to ask.
+   */
+  static tenantNotFound() {
+    return new ApiError(404, 'TENANT_NOT_FOUND', 'Organisation not found')
+  }
+
+  /** Post-authentication only: the caller demonstrably works here (§Appendix C). */
+  static tenantSuspended() {
+    return new ApiError(403, 'TENANT_SUSPENDED', 'Your organisation has been suspended')
+  }
+
+  /**
+   * §23.2: never a silent failure. `details` carries the limit that was hit and
+   * what the current plan allows, so the UI can say which, and offer an upgrade
+   * rather than a shrug.
+   */
+  static planLimitReached(message: string, details?: ApiErrorDetail[]) {
+    return new ApiError(403, 'PLAN_LIMIT_REACHED', message, details)
+  }
+
+  static planFeatureLocked(message: string, details?: ApiErrorDetail[]) {
+    return new ApiError(403, 'PLAN_FEATURE_LOCKED', message, details)
+  }
 }

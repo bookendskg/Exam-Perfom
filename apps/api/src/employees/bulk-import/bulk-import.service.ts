@@ -173,6 +173,7 @@ export class BulkImportService {
     return this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
+          tenantId: principal.tenantId,
           phone: row.phone,
           email: row.email || null,
           role: 'staff',
@@ -181,10 +182,11 @@ export class BulkImportService {
         },
       })
 
-      const employeeCode = await claimEmployeeCode(tx, outletId)
+      const employeeCode = await claimEmployeeCode(tx, principal.tenantId, outletId)
 
       const employee = await tx.employee.create({
         data: {
+          tenantId: principal.tenantId,
           userId: user.id,
           employeeCode,
           firstName: row.first_name,
@@ -212,10 +214,12 @@ export class BulkImportService {
 
       await tx.employeeTimeline.create({
         data: {
+          tenantId: principal.tenantId,
           employeeId: employee.id,
           eventType: 'joined',
           eventDate: new Date(row.joining_date),
-          title: 'Joined Bookends',
+          // Was "Joined Bookends" — see employee.service.ts.
+          title: 'Joined',
           description: 'Created via bulk import',
           createdById: principal.userId,
         },

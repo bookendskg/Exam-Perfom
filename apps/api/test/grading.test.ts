@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 let app: Application
@@ -20,7 +20,7 @@ beforeEach(async () => {
     db.outlet.findFirstOrThrow({ where: { code: 'CP' } }),
   ])
   const author = await makeUser({ role: 'admin', mustChangePassword: false })
-  const topic = await db.topic.create({ data: { nameEn: 'Food Safety', departmentId: kitchen.id } })
+  const topic = await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id } })
 
   ctx = {
     kitchen: kitchen.id,
@@ -39,7 +39,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status, `login failed: ${JSON.stringify(res.body)}`).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -60,7 +60,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
   const employee = await db.employee.findFirstOrThrow({ where: { userId: staff.user.id } })
 
   const theory = await db.question.create({
-    data: {
+    data: { tenantId: testTenantId(),
       type: 'theory',
       topicId: ctx.topic,
       departmentId: ctx.kitchen,
@@ -72,7 +72,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
     },
   })
   const video = await db.question.create({
-    data: {
+    data: { tenantId: testTenantId(),
       type: 'video_image',
       topicId: ctx.topic,
       departmentId: ctx.kitchen,
@@ -89,7 +89,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
     },
   })
   const mcq = await db.question.create({
-    data: {
+    data: { tenantId: testTenantId(),
       type: 'mcq',
       topicId: ctx.topic,
       departmentId: ctx.kitchen,
@@ -107,7 +107,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
   })
 
   const exam = await db.exam.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examCode: `EX-G-${Math.floor(Math.random() * 1_000_000)}`,
       nameEn: 'Kitchen Exam',
       scheduledDate: new Date('2027-03-15T00:00:00.000Z'),
@@ -126,13 +126,13 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
   const eqs = await Promise.all(
     [theory, video, mcq].map((q, i) =>
       db.examQuestion.create({
-        data: { examId: exam.id, questionId: q.id, sortOrder: i, marks: Number(q.marks) },
+        data: { tenantId: testTenantId(), examId: exam.id, questionId: q.id, sortOrder: i, marks: Number(q.marks) },
       })
     )
   )
 
   const assignment = await db.examAssignment.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examId: exam.id,
       employeeId: employee.id,
       status: 'submitted',
@@ -141,7 +141,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
   })
 
   const theoryResp = await db.examResponse.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examAssignmentId: assignment.id,
       examQuestionId: eqs[0]!.id,
       questionId: theory.id,
@@ -151,7 +151,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
     },
   })
   const videoResp = await db.examResponse.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examAssignmentId: assignment.id,
       examQuestionId: eqs[1]!.id,
       questionId: video.id,
@@ -163,7 +163,7 @@ async function submittedPaper(over: { examOutletId?: string | null } = {}) {
   })
   // The MCQ is already auto-graded by Module 7.
   const mcqResp = await db.examResponse.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examAssignmentId: assignment.id,
       examQuestionId: eqs[2]!.id,
       questionId: mcq.id,

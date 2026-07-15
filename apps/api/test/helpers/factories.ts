@@ -1,5 +1,5 @@
 import { hashPassword, type Role } from '@bookends/core'
-import { testDb } from './db.js'
+import { testDb, testTenantId } from './db.js'
 
 let phoneCounter = 9000000000
 
@@ -18,15 +18,19 @@ export interface MakeUserOptions {
   /** Outlets this user manages (drives outlet_manager scope via Outlet.managerId). */
   managesOutletCodes?: string[]
   employeeOutletCode?: string
+  /** Defaults to the anchor tenant. Only cross-tenant tests need to set it. */
+  tenantId?: string
 }
 
 export async function makeUser(opts: MakeUserOptions = {}) {
   const prisma = testDb()
   const password = opts.password ?? 'Password1'
   const phone = opts.phone ?? nextPhone()
+  const tenantId = opts.tenantId ?? testTenantId()
 
   const user = await prisma.user.create({
     data: {
+      tenantId,
       phone,
       role: opts.role ?? 'staff',
       passwordHash: await hashPassword(password),
@@ -56,6 +60,7 @@ export async function makeUser(opts: MakeUserOptions = {}) {
 
     await prisma.employee.create({
       data: {
+        tenantId,
         userId: user.id,
         employeeCode: `BK-${claimed.code}-${String(claimed.lastEmployeeSeq).padStart(3, '0')}`,
         firstName: 'Test',

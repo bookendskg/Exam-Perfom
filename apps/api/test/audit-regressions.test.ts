@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 
 /**
@@ -28,7 +28,7 @@ beforeEach(async () => {
     db.outlet.findFirstOrThrow({ where: { code: 'CP' } }),
   ])
   const author = await makeUser({ role: 'admin', mustChangePassword: false })
-  const topic = await db.topic.create({ data: { nameEn: 'Food Safety', departmentId: kitchen.id } })
+  const topic = await db.topic.create({ data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id } })
 
   ctx = {
     kitchen: kitchen.id,
@@ -47,7 +47,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -57,7 +57,7 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
 describe('AUDIT: source documents had NO scope enforcement at all', () => {
   async function makeDoc(outletId: string | null) {
     return testDb().sourceDocument.create({
-      data: {
+      data: { tenantId: testTenantId(),
         title: outletId ? 'Aiko Kitchen SOP' : 'Group-wide Food Safety Manual',
         type: 'sop',
         departmentId: ctx.kitchen,
@@ -178,7 +178,7 @@ describe('AUDIT: a DRAFT exam was sittable, bypassing all of §11.3', () => {
 
     // Deliberately UNAPPROVED — exactly what §11.3 exists to keep out.
     const question = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         topicId: ctx.topic,
         departmentId: ctx.kitchen,
@@ -196,7 +196,7 @@ describe('AUDIT: a DRAFT exam was sittable, bypassing all of §11.3', () => {
     })
 
     const exam = await testDb().exam.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examCode: `EX-DRAFT-${Math.floor(Math.random() * 1_000_000)}`,
         nameEn: 'Unpublished exam',
         scheduledDate: today,
@@ -211,9 +211,9 @@ describe('AUDIT: a DRAFT exam was sittable, bypassing all of §11.3', () => {
       },
     })
     await testDb().examQuestion.create({
-      data: { examId: exam.id, questionId: question.id, sortOrder: 0, marks: 1 },
+      data: { tenantId: testTenantId(), examId: exam.id, questionId: question.id, sortOrder: 0, marks: 1 },
     })
-    await testDb().examAssignment.create({ data: { examId: exam.id, employeeId } })
+    await testDb().examAssignment.create({ data: { tenantId: testTenantId(), examId: exam.id, employeeId } })
     return exam
   }
 
@@ -278,7 +278,7 @@ describe('AUDIT: flagging a question erased the answer', () => {
     const employee = await testDb().employee.findFirstOrThrow({ where: { userId: staff.user.id } })
 
     const question = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         topicId: ctx.topic,
         departmentId: ctx.kitchen,
@@ -297,7 +297,7 @@ describe('AUDIT: flagging a question erased the answer', () => {
 
     const now = new Date()
     const exam = await testDb().exam.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examCode: `EX-FLAG-${Math.floor(Math.random() * 1_000_000)}`,
         nameEn: 'Exam',
         scheduledDate: new Date(
@@ -314,9 +314,9 @@ describe('AUDIT: flagging a question erased the answer', () => {
       },
     })
     await testDb().examQuestion.create({
-      data: { examId: exam.id, questionId: question.id, sortOrder: 0, marks: 1 },
+      data: { tenantId: testTenantId(), examId: exam.id, questionId: question.id, sortOrder: 0, marks: 1 },
     })
-    await testDb().examAssignment.create({ data: { examId: exam.id, employeeId: employee.id } })
+    await testDb().examAssignment.create({ data: { tenantId: testTenantId(), examId: exam.id, employeeId: employee.id } })
 
     const started = await request(app)
       .post(`/api/v1/staff/exams/${exam.id}/start`)
@@ -406,7 +406,7 @@ describe('AUDIT: §11.3 "all employees active" ignored on_leave', () => {
     const employee = await testDb().employee.findFirstOrThrow({ where: { userId: staff.user.id } })
 
     const question = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         topicId: ctx.topic,
         departmentId: ctx.kitchen,

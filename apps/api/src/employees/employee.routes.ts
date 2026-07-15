@@ -1,9 +1,9 @@
-import { Router, type RequestHandler } from 'express'
-import multer, { MulterError } from 'multer'
+import { Router } from 'express'
 import { ok } from '@bookends/core'
 import type { Deps } from '../app.js'
 import { BulkImportService, EMPLOYEE_IMPORT_COLUMNS } from './bulk-import/bulk-import.service.js'
 import { parseUpload } from '../bulk-import/parse.js'
+import { singleFileUpload } from '../http/middleware/upload.js'
 import { validate } from '../http/middleware/validate.js'
 import { requirePermission } from '../rbac/require-permission.js'
 import { requirePrincipal } from '../auth/middleware/authenticate.js'
@@ -28,40 +28,9 @@ export function buildEmployeeRouter(deps: Deps) {
 
   // Memory storage: a 5 MB spreadsheet does not need a disk round trip, and
   // never touching the filesystem means no temp files to clean up or leak.
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  })
-
-  /**
-   * Multer rejects oversized or unexpected files with a MulterError, which the
-   * terminal handler would flatten to an opaque 500. These are the caller's
-   * mistakes and deserve a §5.2 validation error saying what went wrong.
-   */
-  const uploadSingle = (field: string): RequestHandler => {
-    const handler = upload.single(field)
-    return (req, res, next) => {
-      handler(req, res, (err: unknown) => {
-        if (err instanceof MulterError) {
-          if (err.code === 'LIMIT_FILE_SIZE') {
-            next(
-              ApiError.validation('The file is too large', [
-                { field: 'file', message: 'Maximum upload size is 5 MB' },
-              ])
-            )
-            return
-          }
-          next(
-            ApiError.validation('Could not read the upload', [
-              { field: err.field ?? 'file', message: err.code },
-            ])
-          )
-          return
-        }
-        next(err)
-      })
-    }
-  }
+  // Shared with the question importer — and the shared version is also what
+  // keeps the tenant context alive across the upload. See its docblock.
+  const uploadSingle = (field: string) => singleFileUpload(field)
 
   const scopeOf = (req: { scope?: 'all' | 'own_outlet' | 'own_resource' | 'none' }) => {
     if (!req.scope) throw ApiError.forbidden()

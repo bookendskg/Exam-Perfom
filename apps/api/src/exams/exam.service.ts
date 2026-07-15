@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import { pageMeta, type Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import type { Principal } from '../infra/session-store/index.js'
@@ -173,10 +174,11 @@ export class ExamService {
     const exam = await this.prisma.$transaction(async (tx) => {
       // Claimed inside the transaction so a failed insert rolls the counter
       // back rather than burning a code.
-      const examCode = await claimExamCode(tx, scheduledDate)
+      const examCode = await claimExamCode(tx, principal.tenantId, scheduledDate)
 
       const created = await tx.exam.create({
         data: {
+          tenantId: principal.tenantId,
           templateId: template?.id ?? null,
           examCode,
           nameEn: input.nameEn,
@@ -207,6 +209,7 @@ export class ExamService {
       if (questions.length > 0) {
         await tx.examQuestion.createMany({
           data: questions.map((q, i) => ({
+            tenantId: principal.tenantId,
             examId: created.id,
             questionId: q.id,
             sortOrder: i,
@@ -436,8 +439,13 @@ export class ExamService {
 
     if (employees.length === 0) return 0
 
+    // No Principal reaches this method, so the tenant comes from the ambient
+    // request scope. The extension cross-checks it against the same scope, so a
+    // mismatch is impossible rather than merely unlikely.
+    const tenantId = currentTenantId()
+
     const created = await this.prisma.examAssignment.createMany({
-      data: employees.map((e) => ({ examId, employeeId: e.id })),
+      data: employees.map((e) => ({ tenantId, examId, employeeId: e.id })),
       // exam_assignments is UNIQUE(exam_id, employee_id) — re-assigning is a
       // no-op, not an error, so an admin can safely re-run it after adding staff.
       skipDuplicates: true,

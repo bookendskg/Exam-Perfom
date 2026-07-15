@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import type { Language } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import { combine } from '../exams/publish-validation.js'
@@ -140,6 +141,7 @@ export class StaffExamService {
       // §4.1 exam_sessions — device info for §24's proctoring.
       await this.prisma.examSession.create({
         data: {
+          tenantId: currentTenantId(),
           examAssignmentId: assignment.id,
           startedAt,
           deviceInfo: (input.deviceInfo ?? undefined) as never,
@@ -247,6 +249,7 @@ export class StaffExamService {
         },
       },
       create: {
+        tenantId: currentTenantId(),
         examAssignmentId: assignment.id,
         examQuestionId: examQuestion.id,
         questionId: examQuestion.question.id,

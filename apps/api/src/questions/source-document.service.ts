@@ -123,6 +123,7 @@ export class SourceDocumentService {
 
     return this.prisma.sourceDocument.create({
       data: {
+        tenantId: principal.tenantId,
         title: input.title,
         type: input.type,
         description: input.description ?? null,

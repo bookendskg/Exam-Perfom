@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
+import { runInTenant } from '@bookends/db'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { SnapshotService } from '../src/analytics/snapshot.service.js'
 
@@ -43,7 +44,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -68,7 +69,7 @@ async function sitter(opts: {
   const employee = await testDb().employee.findFirstOrThrow({ where: { userId: made.user.id } })
 
   const exam = await testDb().exam.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examCode: `EX-AN-${Math.floor(Math.random() * 10_000_000)}`,
       nameEn: 'Monthly Exam',
       scheduledDate: new Date(Date.UTC(opts.year ?? YEAR, (opts.month ?? MONTH) - 1, 15)),
@@ -85,7 +86,7 @@ async function sitter(opts: {
 
   const status = opts.status ?? 'graded'
   const assignment = await testDb().examAssignment.create({
-    data: {
+    data: { tenantId: testTenantId(),
       examId: exam.id,
       employeeId: employee.id,
       status,
@@ -101,7 +102,7 @@ async function sitter(opts: {
 
   if (opts.topicScore) {
     const question = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         topicId: opts.topicScore.topicId,
         departmentId: ctx.kitchen,
@@ -113,10 +114,10 @@ async function sitter(opts: {
       },
     })
     const eq = await testDb().examQuestion.create({
-      data: { examId: exam.id, questionId: question.id, sortOrder: 0, marks: opts.topicScore.max },
+      data: { tenantId: testTenantId(), examId: exam.id, questionId: question.id, sortOrder: 0, marks: opts.topicScore.max },
     })
     await testDb().examResponse.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examAssignmentId: assignment.id,
         examQuestionId: eq.id,
         questionId: question.id,
@@ -131,7 +132,13 @@ async function sitter(opts: {
   return { employee, exam, assignment }
 }
 
-const rebuild = (year = YEAR, month = MONTH) => new SnapshotService(testDb()).rebuild(year, month)
+/**
+ * Driven directly rather than over HTTP, so there is no request to carry a
+ * tenant — the scope has to be opened here. In production this is a job, and
+ * scheduler.service.ts opens the same scope per tenant for the same reason.
+ */
+const rebuild = (year = YEAR, month = MONTH) =>
+  runInTenant(testTenantId(), () => new SnapshotService(testDb()).rebuild(year, month))
 
 describe('§4.1 performance snapshots', () => {
   it('rolls up an employee’s month', async () => {
@@ -266,12 +273,12 @@ describe('§4.1 improvement_from_last', () => {
     const employee = await testDb().employee.findFirstOrThrow({ where: { userId: made.user.id } })
 
     await testDb().performanceSnapshot.create({
-      data: { employeeId: employee.id, year: YEAR, month: 2, averageScore: 60 },
+      data: { tenantId: testTenantId(), employeeId: employee.id, year: YEAR, month: 2, averageScore: 60 },
     })
 
     // Same employee, this month, scoring 75.
     const exam = await testDb().exam.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examCode: 'EX-IMP-1',
         nameEn: 'Exam',
         scheduledDate: new Date(Date.UTC(YEAR, MONTH - 1, 15)),
@@ -285,7 +292,7 @@ describe('§4.1 improvement_from_last', () => {
       },
     })
     await testDb().examAssignment.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examId: exam.id,
         employeeId: employee.id,
         status: 'graded',
@@ -319,11 +326,11 @@ describe('§4.1 improvement_from_last', () => {
     })
     const employee = await testDb().employee.findFirstOrThrow({ where: { userId: made.user.id } })
     await testDb().performanceSnapshot.create({
-      data: { employeeId: employee.id, year: 2026, month: 12, averageScore: 50 },
+      data: { tenantId: testTenantId(), employeeId: employee.id, year: 2026, month: 12, averageScore: 50 },
     })
 
     const exam = await testDb().exam.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examCode: 'EX-JAN-1',
         nameEn: 'Exam',
         scheduledDate: new Date(Date.UTC(2027, 0, 15)),
@@ -337,7 +344,7 @@ describe('§4.1 improvement_from_last', () => {
       },
     })
     await testDb().examAssignment.create({
-      data: {
+      data: { tenantId: testTenantId(),
         examId: exam.id,
         employeeId: employee.id,
         status: 'graded',
@@ -409,10 +416,10 @@ describe('§5.3 analytics endpoints', () => {
 
   it('finds weak topics, weakest first (§1.2)', async () => {
     const strong = await testDb().topic.create({
-      data: { nameEn: 'Hygiene', departmentId: ctx.kitchen },
+      data: { tenantId: testTenantId(), nameEn: 'Hygiene', departmentId: ctx.kitchen },
     })
     const weak = await testDb().topic.create({
-      data: { nameEn: 'Food Safety', departmentId: ctx.kitchen },
+      data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: ctx.kitchen },
     })
 
     await sitter({

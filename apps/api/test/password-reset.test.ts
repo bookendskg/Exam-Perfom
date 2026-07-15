@@ -3,7 +3,7 @@ import request from 'supertest'
 import type { Application } from 'express'
 import { createHash } from 'node:crypto'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser, resetOutletManagers } from './helpers/factories.js'
 
 let app: Application
@@ -18,7 +18,7 @@ afterAll(async () => {
   await disconnectDb()
 })
 
-const forgot = (phone: string) => request(app).post('/api/v1/auth/forgot-password').send({ phone })
+const forgot = (phone: string) => request(app).post('/api/v1/auth/forgot-password').send({ tenantSlug: TEST_TENANT_SLUG, phone })
 
 const reset = (token: string, newPassword: string) =>
   request(app).post('/api/v1/auth/reset-password').send({ token, newPassword })
@@ -80,7 +80,7 @@ describe('POST /auth/reset-password (§5.3)', () => {
     await reset(token, 'newpass').expect(200)
 
     // The new password works…
-    await request(app).post('/api/v1/auth/login').send({ phone, password: 'newpass' }).expect(200)
+    await request(app).post('/api/v1/auth/login').send({ tenantSlug: TEST_TENANT_SLUG, phone, password: 'newpass' }).expect(200)
   })
 
   it('rejects an unknown token', async () => {
@@ -123,7 +123,7 @@ describe('POST /auth/reset-password (§5.3)', () => {
 
   it('revokes EVERY session including the current one', async () => {
     const { phone, password, user } = await makeUser({ role: 'admin' })
-    const live = await request(app).post('/api/v1/auth/login').send({ phone, password })
+    const live = await request(app).post('/api/v1/auth/login').send({ tenantSlug: TEST_TENANT_SLUG, phone, password })
 
     const token = await requestReset(phone, user.id)
     await reset(token, 'BrandNew1').expect(200)

@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 import { z } from 'zod'
 import { ApiError } from '../http/api-error.js'
 
@@ -80,6 +81,7 @@ export class TopicService {
 
     return this.prisma.topic.create({
       data: {
+        tenantId: currentTenantId(),
         nameEn: input.nameEn,
         nameHi: input.nameHi ?? null,
         nameGu: input.nameGu ?? null,

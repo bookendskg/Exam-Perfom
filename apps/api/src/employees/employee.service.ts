@@ -134,7 +134,12 @@ export class EmployeeService {
 
     await this.assertOrgRefsExist(input)
 
-    const existing = await this.prisma.user.findUnique({ where: { phone: input.phone } })
+    // Per tenant, not globally: this number being taken at another customer is
+    // none of this tenant's business, and blocking on it would leak that the
+    // number exists elsewhere on the platform.
+    const existing = await this.prisma.user.findUnique({
+      where: { tenantId_phone: { tenantId: principal.tenantId, phone: input.phone } },
+    })
     if (existing) {
       throw ApiError.conflict('That phone number is already registered', [
         { field: 'phone', message: 'Already in use' },
@@ -157,6 +162,7 @@ export class EmployeeService {
     const employee = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
+          tenantId: principal.tenantId,
           phone: input.phone,
           email: input.email ?? null,
           role,
@@ -169,10 +175,12 @@ export class EmployeeService {
 
       // Claimed inside the transaction so a failed insert rolls the counter back
       // rather than burning a code.
-      const employeeCode = input.employeeCode ?? (await claimEmployeeCode(tx, input.outletId))
+      const employeeCode =
+        input.employeeCode ?? (await claimEmployeeCode(tx, principal.tenantId, input.outletId))
 
       const created = await tx.employee.create({
         data: {
+          tenantId: principal.tenantId,
           userId: user.id,
           employeeCode,
           firstName: input.firstName,
@@ -201,10 +209,13 @@ export class EmployeeService {
 
       await tx.employeeTimeline.create({
         data: {
+          tenantId: principal.tenantId,
           employeeId: created.id,
           eventType: 'joined',
           eventDate: new Date(input.joiningDate),
-          title: 'Joined Bookends',
+          // Not "Joined Bookends" any more — this text is written into every
+          // tenant's timeline, and only one of them is Bookends.
+          title: 'Joined',
           createdById: principal.userId,
         },
       })
@@ -312,6 +323,7 @@ export class EmployeeService {
 
       await tx.employeeTimeline.create({
         data: {
+          tenantId: principal.tenantId,
           employeeId: id,
           eventType: timelineEventFor(status),
           title: `Status changed from ${existing.employmentStatus} to ${status}`,

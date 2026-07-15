@@ -6,6 +6,7 @@ import compression from 'compression'
 import { pinoHttp } from 'pino-http'
 import type { Logger } from 'pino'
 import type { PrismaClient } from '@bookends/db'
+import { withTenantScope } from '@bookends/db'
 import { ok } from '@bookends/core'
 import type { Config } from './config/env.js'
 import type { SessionStore } from './infra/session-store/index.js'
@@ -13,6 +14,7 @@ import { errorHandler, notFoundHandler } from './http/middleware/error-handler.j
 import { roleLimiter } from './http/middleware/rate-limit.js'
 import { markPublic } from './rbac/require-permission.js'
 import { requirePasswordChange } from './auth/middleware/require-password-change.js'
+import { tenantScope } from './tenant/tenant.middleware.js'
 import { buildAuthRouter } from './auth/auth.routes.js'
 import { buildEmployeeRouter } from './employees/employee.routes.js'
 import { buildStaffRouter } from './staff/staff.routes.js'
@@ -40,8 +42,18 @@ export interface Deps {
  * Builds the app. Deliberately does NOT listen — supertest needs an app that
  * never binds a port, and main.ts owns the socket.
  */
-export function buildApp(deps: Deps): Application {
-  const { config, logger } = deps
+export function buildApp(rawDeps: Deps): Application {
+  const { config, logger } = rawDeps
+
+  /**
+   * Every service below gets the tenant-scoped client, never the raw one.
+   *
+   * Wrapped here, once, rather than at each construction site: a service that
+   * could be handed either client is a service someone will eventually hand the
+   * wrong one. There is exactly one client in this process, and it is guarded.
+   */
+  const deps: Deps = { ...rawDeps, prisma: withTenantScope(rawDeps.prisma) }
+
   const app = express()
 
   // Behind nginx every request otherwise carries the proxy's IP, which collapses
@@ -79,13 +91,18 @@ export function buildApp(deps: Deps): Application {
   const { router: authRouter, requireAuth } = buildAuthRouter(deps)
   app.use('/api/v1/auth', authRouter)
 
-  // Everything mounted below this point is authenticated, rate-limited per role
-  // (§5.4), and blocked while a password change is outstanding (§7.3).
+  // Everything mounted below this point is authenticated, tenant-scoped,
+  // rate-limited per role (§5.4), and blocked while a password change is
+  // outstanding (§7.3).
   //
   // Note this also means an unknown /api/v1/* path returns 401 rather than 404
   // for an anonymous caller. That is deliberate — a 404 here would let anyone
   // enumerate which endpoints exist.
-  app.use('/api/v1', requireAuth, roleLimiter(), requirePasswordChange())
+  //
+  // tenantScope() sits immediately after requireAuth, so no route below can run
+  // a query outside its tenant: the extension refuses an unscoped query, so
+  // forgetting to mount it fails loudly rather than leaking quietly.
+  app.use('/api/v1', requireAuth, tenantScope(), roleLimiter(), requirePasswordChange())
 
   app.use('/api/v1/employees', buildEmployeeRouter(deps))
   // Mounted before /staff so /staff/exams is not swallowed by it.

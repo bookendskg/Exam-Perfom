@@ -4,7 +4,7 @@ import { hashPassword } from '@bookends/core'
 import { MemorySessionStore } from '../src/infra/session-store/memory-store.js'
 import { PostgresSessionStore } from '../src/infra/session-store/postgres-store.js'
 import type { Principal, SessionStore } from '../src/infra/session-store/index.js'
-import { testDb, truncateAll, disconnectDb } from './helpers/db.js'
+import { testDb, testTenantId, truncateAll, disconnectDb } from './helpers/db.js'
 
 /**
  * One contract, both implementations. If Postgres and memory ever disagree,
@@ -15,6 +15,7 @@ const prisma = testDb()
 async function makeUser(role: 'staff' | 'admin' = 'staff') {
   return prisma.user.create({
     data: {
+      tenantId: testTenantId(),
       phone: `9${Math.floor(Math.random() * 1_000_000_000)}`.slice(0, 10),
       role,
       passwordHash: await hashPassword('Password1'),
@@ -25,6 +26,7 @@ async function makeUser(role: 'staff' | 'admin' = 'staff') {
 async function makeSessionRow(userId: string) {
   return prisma.userSession.create({
     data: {
+      tenantId: testTenantId(),
       userId,
       refreshTokenHash: randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64),
       expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),

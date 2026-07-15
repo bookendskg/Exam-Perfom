@@ -19,6 +19,9 @@ import {
   type ResetPasswordInput,
 } from './auth.schemas.js'
 import { LoggingDispatcher, UnconfiguredDispatcher } from '../notifications/dispatcher.js'
+import { runInTenant } from '@bookends/db'
+import { readTenantHint, requireTenant, resolveTenantBySlug } from '../tenant/tenant.resolver.js'
+import { tenantScope } from '../tenant/tenant.middleware.js'
 import { setRefreshCookie, clearRefreshCookie, readRefreshToken } from './cookies.js'
 import type { IssuedSession } from './session.service.js'
 
@@ -79,10 +82,17 @@ export function buildAuthRouter(deps: Deps) {
       void (async () => {
         try {
           const body = req.valid!.body as LoginInput
-          const issued = await auth.login(
-            body.phone,
-            body.password,
-            deviceFrom(req, body.deviceInfo)
+          // Before the password is looked at. Which organisation you are
+          // logging into is not something we infer from your phone number —
+          // see tenant.resolver.ts for why that matters.
+          const tenant = await requireTenant(prisma, req)
+
+          // Inside the tenant from here on. The auth router is mounted above
+          // the global tenantScope() middleware — it has to be, since it is
+          // what establishes the tenant — so login opens its own scope once it
+          // knows which one it is talking to.
+          const issued = await runInTenant(tenant.tenantId, () =>
+            auth.login(tenant.tenantId, body.phone, body.password, deviceFrom(req, body.deviceInfo))
           )
           // An APK login declares itself by sending deviceInfo; browsers do not.
           respondWithSession(res, issued, !body.deviceInfo)
@@ -108,8 +118,13 @@ export function buildAuthRouter(deps: Deps) {
     })()
   })
 
+  // The authenticated routes below need a tenant scope of their own: this
+  // router is mounted above app.ts's global tenantScope(), because it is the
+  // thing that establishes the tenant in the first place.
+  const scoped = [requireAuth, tenantScope()] as const
+
   // §5.3 POST /api/v1/auth/logout — ends only the calling session.
-  router.post('/logout', requireAuth, (req, res, next) => {
+  router.post('/logout', ...scoped, (req, res, next) => {
     void (async () => {
       try {
         const principal = requirePrincipal(req)
@@ -129,7 +144,7 @@ export function buildAuthRouter(deps: Deps) {
    */
   router.post(
     '/change-password',
-    requireAuth,
+    ...scoped,
     validate({ body: changePasswordSchema }),
     (req, res, next) => {
       void (async () => {
@@ -160,7 +175,17 @@ export function buildAuthRouter(deps: Deps) {
       void (async () => {
         try {
           const body = req.valid!.body as ForgotPasswordInput
-          await auth.forgotPassword(body.phone)
+
+          // Unresolvable tenant is swallowed rather than thrown. This endpoint's
+          // whole contract is that it says nothing — answering TENANT_NOT_FOUND
+          // here would reinstate the enumeration oracle one field to the left,
+          // and let someone map our customer list from the login page.
+          const hint = readTenantHint(req)
+          const tenant = hint ? await resolveTenantBySlug(prisma, hint.slug) : null
+          if (tenant) {
+            await runInTenant(tenant.tenantId, () => auth.forgotPassword(tenant.tenantId, body.phone))
+          }
+
           // Always 200, even for an unknown phone — anything else enumerates
           // accounts. The response says nothing about whether one was sent.
           res.json(
@@ -191,7 +216,7 @@ export function buildAuthRouter(deps: Deps) {
     }
   )
 
-  router.get('/me', requireAuth, (req, res, next) => {
+  router.get('/me', ...scoped, (req, res, next) => {
     try {
       const principal = requirePrincipal(req)
       res.json(

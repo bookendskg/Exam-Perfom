@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { currentTenantId } from '@bookends/db'
 
 /**
  * §4.1 performance_snapshots — §1.2's "track individual employee performance
@@ -125,6 +126,7 @@ export class SnapshotService {
       await this.prisma.performanceSnapshot.upsert({
         where: { employeeId_month_year: { employeeId: agg.employeeId, month, year } },
         create: {
+          tenantId: currentTenantId(),
           employeeId: agg.employeeId,
           month,
           year,

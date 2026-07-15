@@ -27,6 +27,14 @@ enum Role {
   staff
 }
 
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  cancelled
+  suspended
+}
+
 enum Language {
   en
   hi
@@ -196,13 +204,164 @@ enum WhatsAppStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Platform-level tables (SaaS §7.2)
+//
+// These are the ONLY tables without a tenantId. Everything else is tenant data
+// and is scoped by the Prisma tenant extension; see packages/db/src/tenant.ts.
+// ---------------------------------------------------------------------------
+
+/// A subscription tier. Limits are nullable, and NULL means unlimited — not
+/// zero. planGuard treats the two very differently, so never default these.
+model Plan {
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String @db.VarChar(50)
+  code String @unique @db.VarChar(20)
+
+  priceMonthlyInr Decimal? @map("price_monthly_inr") @db.Decimal(10, 2)
+  priceMonthlyUsd Decimal? @map("price_monthly_usd") @db.Decimal(10, 2)
+  priceAnnualInr  Decimal? @map("price_annual_inr") @db.Decimal(10, 2)
+  priceAnnualUsd  Decimal? @map("price_annual_usd") @db.Decimal(10, 2)
+
+  /// NULL = unlimited, for every limit below.
+  maxEmployees      Int?     @map("max_employees")
+  maxOutlets        Int?     @map("max_outlets")
+  maxExamsPerMonth  Int?     @map("max_exams_per_month")
+  maxQuestions      Int?     @map("max_questions")
+  maxStorageGb      Decimal? @map("max_storage_gb") @db.Decimal(5, 2)
+
+  /// Which QuestionType values this plan may create: ['mcq'], ['mcq','theory'], …
+  questionTypes       String[] @map("question_types")
+  autoScheduling      Boolean  @default(false) @map("auto_scheduling")
+  maxLanguages        Int?     @default(1) @map("max_languages")
+  pdfExport           Boolean  @default(false) @map("pdf_export")
+  excelExport         Boolean  @default(false) @map("excel_export")
+  whatsappNotifications Boolean @default(false) @map("whatsapp_notifications")
+  aiInsights          Boolean  @default(false) @map("ai_insights")
+  customBranding      Boolean  @default(false) @map("custom_branding")
+  customDomain        Boolean  @default(false) @map("custom_domain")
+  apiAccess           Boolean  @default(false) @map("api_access")
+  dataRetentionMonths Int      @default(6) @map("data_retention_months")
+
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order") @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenants Tenant[]
+
+  @@map("plans")
+}
+
+/// A customer organisation. Bookends Hospitality is tenant #1, not a special
+/// case — the anchor customer is seeded through the same path as everyone else.
+model Tenant {
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String @db.VarChar(255)
+  /// Subdomain label: "bookends" → bookends.examhub.com.
+  slug String @unique @db.VarChar(100)
+
+  planId             String?            @map("plan_id") @db.Uuid
+  subscriptionStatus SubscriptionStatus @default(trialing) @map("subscription_status")
+  trialEndsAt        DateTime?          @map("trial_ends_at") @db.Timestamptz(6)
+
+  /// §8.2 employee codes are BK-AK-001 for Bookends; every tenant picks its own
+  /// prefix. Hardcoding "BK" was correct for one customer and is not for many.
+  employeeCodePrefix String @default("EMP") @map("employee_code_prefix") @db.VarChar(10)
+
+  ownerName  String? @map("owner_name") @db.VarChar(200)
+  ownerEmail String  @map("owner_email") @db.VarChar(255)
+  ownerPhone String? @map("owner_phone") @db.VarChar(15)
+
+  timezone        String   @default("Asia/Kolkata") @db.VarChar(50)
+  defaultLanguage Language @default(en) @map("default_language")
+
+  isActive        Boolean   @default(true) @map("is_active")
+  suspendedAt     DateTime? @map("suspended_at") @db.Timestamptz(6)
+  suspendedReason String?   @map("suspended_reason")
+  /// Soft delete: §24.1 gives a departing tenant a 30-day grace before purge.
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  plan  Plan?         @relation(fields: [planId], references: [id])
+  usage TenantUsage[]
+
+  // Back-relations. This list IS the inventory of tenant-scoped models: if a
+  // model is missing here it is missing a tenantId, and the tenant extension
+  // will not scope it.
+  users                User[]
+  sessions             UserSession[]
+  examCodeCounters     ExamCodeCounter[]
+  employees            Employee[]
+  employeeSkills       EmployeeSkill[]
+  employeeTimeline     EmployeeTimeline[]
+  outlets              Outlet[]
+  departments          Department[]
+  designations         Designation[]
+  outletDepartments    OutletDepartment[]
+  sourceDocuments      SourceDocument[]
+  topics               Topic[]
+  questions            Question[]
+  questionReviews      QuestionReview[]
+  examTemplates        ExamTemplate[]
+  exams                Exam[]
+  examQuestions        ExamQuestion[]
+  examAssignments      ExamAssignment[]
+  examScheduleConfigs  ExamScheduleConfig[]
+  examResponses        ExamResponse[]
+  examSessions         ExamSession[]
+  performanceSnapshots PerformanceSnapshot[]
+  certificates         Certificate[]
+  rewards              Reward[]
+  trainingAssignments  TrainingAssignment[]
+  supervisorRemarks    SupervisorRemark[]
+  auditLogs            AuditLog[]
+  notifications        Notification[]
+  settings             Setting[]
+
+  @@index([slug])
+  @@map("tenants")
+}
+
+/// Per-billing-period usage counters (§4.2), one row per tenant per month.
+///
+/// Counters rather than COUNT(*) at read time: planGuard runs on every create,
+/// and counting 300 employees on each one is a query the limit check does not
+/// need. Recomputed by the usage job; incremented inline on the hot paths.
+model TenantUsage {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  /// 'YYYY-MM'
+  billingPeriod String @map("billing_period") @db.VarChar(7)
+
+  activeEmployees  Int    @default(0) @map("active_employees")
+  activeOutlets    Int    @default(0) @map("active_outlets")
+  totalQuestions   Int    @default(0) @map("total_questions")
+  examsConducted   Int    @default(0) @map("exams_conducted")
+  storageBytes     BigInt @default(0) @map("storage_bytes")
+  whatsappMessages Int    @default(0) @map("whatsapp_messages")
+  aiRequests       Int    @default(0) @map("ai_requests")
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, billingPeriod])
+  @@map("tenant_usage")
+}
+
+// ---------------------------------------------------------------------------
 // Users & Employees (§4.1)
 // ---------------------------------------------------------------------------
 
 model User {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  phone        String    @unique @db.VarChar(15)
-  email        String?   @unique @db.VarChar(255)
+  tenantId     String    @map("tenant_id") @db.Uuid
+  /// Unique per tenant, NOT globally (SaaS §24.1): the same person may work for
+  /// two customer organisations, and one chain hiring a number another chain
+  /// already used must not be a signup failure.
+  phone        String    @db.VarChar(15)
+  email        String?   @db.VarChar(255)
   passwordHash String    @map("password_hash") @db.VarChar(255)
   role         Role      @default(staff)
   isActive     Boolean   @default(true) @map("is_active")
@@ -218,6 +377,10 @@ model User {
 
   // §5.3 forgot/reset. Stored as sha256 hex, never raw — a leaked database must
   // not hand over working reset links.
+  //
+  // Globally unique, unlike phone. The token is 256 bits of entropy and is
+  // presented on its own, before any tenant is known — so it must resolve to
+  // exactly one user across the whole platform, not one per tenant.
   passwordResetTokenHash String?   @unique @map("password_reset_token_hash") @db.Char(64)
   passwordResetExpiresAt DateTime? @map("password_reset_expires_at") @db.Timestamptz(6)
 
@@ -225,6 +388,7 @@ model User {
   // multiple concurrent sessions for admin roles, each with its own device info
   // and idle expiry — one column cannot hold that. See UserSession.
 
+  tenant              Tenant               @relation(fields: [tenantId], references: [id])
   employee            Employee?            @relation("EmployeeAccount")
   employeesCreated    Employee[]           @relation("EmployeeCreatedBy")
   skillsAssessed      EmployeeSkill[]      @relation("SkillAssessedBy")
@@ -247,6 +411,9 @@ model User {
   settingsUpdated     Setting[]            @relation("SettingUpdatedBy")
   sessions            UserSession[]
 
+  @@unique([tenantId, phone])
+  @@unique([tenantId, email])
+  @@index([tenantId])
   @@map("users")
 }
 
@@ -259,11 +426,19 @@ model User {
 ///
 /// It also keeps codes stable: cancelling an exam must not free its number for
 /// reuse, or two different exams in the same month share a code in the record.
+/// The key is (tenantId, period), not period alone. Two tenants scheduling in
+/// the same month must each get their own EX-2026-07-001 — sharing a counter
+/// would both leak one tenant's exam volume to another and make the sequence
+/// non-contiguous for everyone.
 model ExamCodeCounter {
+  tenantId String @map("tenant_id") @db.Uuid
   /// 'YYYY-MM'
-  period  String @id @db.VarChar(7)
+  period  String @db.VarChar(7)
   lastSeq Int    @default(0) @map("last_seq")
 
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, period])
   @@map("exam_code_counters")
 }
 
@@ -277,9 +452,12 @@ model ExamCodeCounter {
 /// already high-entropy, so a fast hash is correct here and argon2 would be
 /// pure latency.
 model UserSession {
-  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String @map("user_id") @db.Uuid
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  userId   String @map("user_id") @db.Uuid
 
+  /// Globally unique, like the reset token and for the same reason: it is
+  /// presented alone at /auth/refresh, before any tenant context exists.
   refreshTokenHash String @unique @map("refresh_token_hash") @db.Char(64)
   /// Previous hash, honoured for 60s after rotation so a mobile client that
   /// fires two refreshes at once does not log itself out.
@@ -301,19 +479,24 @@ model UserSession {
   /// logout | superseded | password_change | password_reset | admin_revoke
   revokedReason String?   @map("revoked_reason") @db.VarChar(50)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([previousTokenHash])
   @@index([userId])
   @@index([expiresAt])
+  @@index([tenantId])
   @@map("user_sessions")
 }
 
 model Employee {
   id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
   userId       String  @unique @map("user_id") @db.Uuid
-  /// BK-{OUTLET_CODE}-{SEQ} per §8.2. Never reused, even after departure.
-  employeeCode String? @unique @map("employee_code") @db.VarChar(20)
+  /// {TENANT_PREFIX}-{OUTLET_CODE}-{SEQ} per §8.2. Never reused, even after
+  /// departure. The prefix is Tenant.employeeCodePrefix — "BK" is Bookends'
+  /// value, not a constant.
+  employeeCode String? @map("employee_code") @db.VarChar(20)
   firstName    String  @map("first_name") @db.VarChar(100)
   lastName     String  @map("last_name") @db.VarChar(100)
   photoUrl     String? @map("photo_url")
@@ -343,6 +526,7 @@ model Employee {
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   createdById String?  @map("created_by") @db.Uuid
 
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
   user        User        @relation("EmployeeAccount", fields: [userId], references: [id], onDelete: Cascade)
   createdBy   User?       @relation("EmployeeCreatedBy", fields: [createdById], references: [id])
   outlet      Outlet      @relation(fields: [outletId], references: [id])
@@ -358,14 +542,17 @@ model Employee {
   trainingAssignments  TrainingAssignment[]
   supervisorRemarks    SupervisorRemark[]
 
+  @@unique([tenantId, employeeCode])
   @@index([outletId])
   @@index([departmentId])
   @@index([userId])
+  @@index([tenantId, outletId])
   @@map("employees")
 }
 
 model EmployeeSkill {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
   employeeId    String   @map("employee_id") @db.Uuid
   skillName     String   @map("skill_name") @db.VarChar(100)
   skillCategory String?  @map("skill_category") @db.VarChar(50)
@@ -376,15 +563,18 @@ model EmployeeSkill {
   notes         String?
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   assessedBy User?    @relation("SkillAssessedBy", fields: [assessedById], references: [id])
 
   @@index([employeeId])
+  @@index([tenantId])
   @@map("employee_skills")
 }
 
 model EmployeeTimeline {
   id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String            @map("tenant_id") @db.Uuid
   employeeId  String            @map("employee_id") @db.Uuid
   eventType   TimelineEventType @map("event_type")
   eventDate   DateTime          @default(now()) @map("event_date") @db.Timestamptz(6)
@@ -394,10 +584,12 @@ model EmployeeTimeline {
   createdById String?           @map("created_by") @db.Uuid
   createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
   employee  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   createdBy User?    @relation("TimelineCreatedBy", fields: [createdById], references: [id])
 
   @@index([employeeId, eventDate])
+  @@index([tenantId])
   @@map("employee_timeline")
 }
 
@@ -407,8 +599,10 @@ model EmployeeTimeline {
 
 model Outlet {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
   name      String   @db.VarChar(100)
-  code      String   @unique @db.VarChar(10)
+  /// Unique per tenant: "KIT" is not Bookends' to reserve platform-wide.
+  code      String   @db.VarChar(10)
 
   /// High-water mark for employee codes at this outlet (§8.2).
   ///
@@ -427,7 +621,8 @@ model Outlet {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  manager User? @relation("OutletManager", fields: [managerId], references: [id])
+  tenant  Tenant @relation(fields: [tenantId], references: [id])
+  manager User?  @relation("OutletManager", fields: [managerId], references: [id])
 
   employees       Employee[]
   departments     OutletDepartment[]
@@ -437,16 +632,21 @@ model Outlet {
   exams           Exam[]
   scheduleConfigs ExamScheduleConfig[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@map("outlets")
 }
 
 model Department {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
   name        String   @db.VarChar(100)
-  code        String   @unique @db.VarChar(10)
+  code        String   @db.VarChar(10)
   description String?
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
 
   employees       Employee[]
   designations    Designation[]
@@ -457,36 +657,45 @@ model Department {
   examTemplates   ExamTemplate[]
   exams           Exam[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@map("departments")
 }
 
 model Designation {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
   name         String   @db.VarChar(100)
-  code         String   @unique @db.VarChar(10)
+  code         String   @db.VarChar(10)
   departmentId String?  @map("department_id") @db.Uuid
   /// Hierarchy level: 1 = entry, 5 = senior. Drives question targeting (§4.1).
   level        Int      @default(1) @db.SmallInt
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
   department Department? @relation(fields: [departmentId], references: [id])
 
   employees     Employee[]
   examTemplates ExamTemplate[]
   exams         Exam[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@map("designations")
 }
 
 model OutletDepartment {
+  tenantId     String @map("tenant_id") @db.Uuid
   outletId     String @map("outlet_id") @db.Uuid
   departmentId String @map("department_id") @db.Uuid
 
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
   outlet     Outlet     @relation(fields: [outletId], references: [id])
   department Department @relation(fields: [departmentId], references: [id])
 
   @@id([outletId, departmentId])
+  @@index([tenantId])
   @@map("outlet_departments")
 }
 
@@ -496,6 +705,7 @@ model OutletDepartment {
 
 model SourceDocument {
   id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String             @map("tenant_id") @db.Uuid
   title        String             @db.VarChar(255)
   type         SourceDocumentType
   description  String?
@@ -509,6 +719,7 @@ model SourceDocument {
   createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
   outlet     Outlet?     @relation(fields: [outletId], references: [id])
   department Department? @relation(fields: [departmentId], references: [id])
   uploadedBy User?       @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
@@ -517,11 +728,13 @@ model SourceDocument {
   questions           Question[]
   trainingAssignments TrainingAssignment[]
 
+  @@index([tenantId])
   @@map("source_documents")
 }
 
 model Topic {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
   nameEn           String   @map("name_en") @db.VarChar(255)
   nameHi           String?  @map("name_hi") @db.VarChar(255)
   nameGu           String?  @map("name_gu") @db.VarChar(255)
@@ -532,6 +745,7 @@ model Topic {
   isActive         Boolean  @default(true) @map("is_active")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
   sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id])
   parentTopic    Topic?          @relation("TopicTree", fields: [parentTopicId], references: [id])
   subTopics      Topic[]         @relation("TopicTree")
@@ -540,11 +754,13 @@ model Topic {
   questions           Question[]
   trainingAssignments TrainingAssignment[]
 
+  @@index([tenantId])
   @@map("topics")
 }
 
 model Question {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
 
   // Classification
   type                 QuestionType
@@ -614,6 +830,7 @@ model Question {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
   topic          Topic?          @relation(fields: [topicId], references: [id])
   department     Department      @relation(fields: [departmentId], references: [id])
   outlet         Outlet?         @relation(fields: [outletId], references: [id])
@@ -628,21 +845,25 @@ model Question {
   @@index([type, departmentId])
   @@index([topicId])
   @@index([difficulty])
+  @@index([tenantId, type, departmentId])
   @@map("questions")
 }
 
 model QuestionReview {
   id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String       @map("tenant_id") @db.Uuid
   questionId String       @map("question_id") @db.Uuid
   reviewerId String       @map("reviewer_id") @db.Uuid
   action     ReviewAction
   comments   String?
   createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
   reviewer User     @relation("QuestionReviewer", fields: [reviewerId], references: [id])
 
   @@index([questionId])
+  @@index([tenantId])
   @@map("question_reviews")
 }
 
@@ -652,6 +873,7 @@ model QuestionReview {
 
 model ExamTemplate {
   id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String  @map("tenant_id") @db.Uuid
   nameEn        String  @map("name_en") @db.VarChar(255)
   nameHi        String? @map("name_hi") @db.VarChar(255)
   nameGu        String? @map("name_gu") @db.VarChar(255)
@@ -693,6 +915,7 @@ model ExamTemplate {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
   outlet      Outlet?      @relation(fields: [outletId], references: [id])
   department  Department?  @relation(fields: [departmentId], references: [id])
   designation Designation? @relation(fields: [designationId], references: [id])
@@ -701,18 +924,21 @@ model ExamTemplate {
   exams           Exam[]
   scheduleConfigs ExamScheduleConfig[]
 
+  @@index([tenantId])
   @@map("exam_templates")
 }
 
 model Exam {
   id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
   templateId String? @map("template_id") @db.Uuid
 
   nameEn String  @map("name_en") @db.VarChar(255)
   nameHi String? @map("name_hi") @db.VarChar(255)
   nameGu String? @map("name_gu") @db.VarChar(255)
-  /// Auto-generated: EX-2026-07-001.
-  examCode String @unique @map("exam_code") @db.VarChar(20)
+  /// Auto-generated: EX-2026-07-001. Unique per tenant — the sequence restarts
+  /// for every customer, so the code alone is not a platform-wide identifier.
+  examCode String @map("exam_code") @db.VarChar(20)
 
   // Schedule
   scheduledDate DateTime @map("scheduled_date") @db.Date
@@ -748,6 +974,7 @@ model Exam {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
   template    ExamTemplate? @relation(fields: [templateId], references: [id])
   outlet      Outlet?       @relation(fields: [outletId], references: [id])
   department  Department?   @relation(fields: [departmentId], references: [id])
@@ -760,13 +987,16 @@ model Exam {
   trainingTriggered   TrainingAssignment[] @relation("TrainingTriggeringExam")
   supervisorRemarks   SupervisorRemark[]
 
+  @@unique([tenantId, examCode])
   @@index([scheduledDate])
   @@index([outletId])
+  @@index([tenantId, scheduledDate])
   @@map("exams")
 }
 
 model ExamQuestion {
   id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String  @map("tenant_id") @db.Uuid
   examId      String  @map("exam_id") @db.Uuid
   questionId  String  @map("question_id") @db.Uuid
   sortOrder   Int     @map("sort_order") @db.SmallInt
@@ -774,17 +1004,20 @@ model ExamQuestion {
   marks       Decimal @db.Decimal(5, 2)
   isMandatory Boolean @default(true) @map("is_mandatory")
 
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
   exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
   question Question @relation(fields: [questionId], references: [id])
 
   responses ExamResponse[]
 
   @@unique([examId, questionId])
+  @@index([tenantId])
   @@map("exam_questions")
 }
 
 model ExamAssignment {
   id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
   examId      String           @map("exam_id") @db.Uuid
   employeeId  String           @map("employee_id") @db.Uuid
   status      AssignmentStatus @default(assigned)
@@ -803,6 +1036,7 @@ model ExamAssignment {
   gradedById        String? @map("graded_by") @db.Uuid
   supervisorRemarks String? @map("supervisor_remarks")
 
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
   exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
   employee Employee @relation(fields: [employeeId], references: [id])
   gradedBy User?    @relation("AssignmentGradedBy", fields: [gradedById], references: [id])
@@ -813,11 +1047,13 @@ model ExamAssignment {
   @@unique([examId, employeeId])
   @@index([employeeId])
   @@index([status])
+  @@index([tenantId, employeeId])
   @@map("exam_assignments")
 }
 
 model ExamScheduleConfig {
   id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String               @map("tenant_id") @db.Uuid
   dayOfMonth    Int                  @default(15) @map("day_of_month") @db.SmallInt
   fallbackRule  ScheduleFallbackRule @default(next_monday) @map("fallback_rule")
   isActive      Boolean              @default(true) @map("is_active")
@@ -832,9 +1068,11 @@ model ExamScheduleConfig {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant   Tenant        @relation(fields: [tenantId], references: [id])
   outlet   Outlet?       @relation(fields: [outletId], references: [id])
   template ExamTemplate? @relation(fields: [templateId], references: [id])
 
+  @@index([tenantId])
   @@map("exam_schedule_config")
 }
 
@@ -844,6 +1082,7 @@ model ExamScheduleConfig {
 
 model ExamResponse {
   id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String @map("tenant_id") @db.Uuid
   examAssignmentId String @map("exam_assignment_id") @db.Uuid
   examQuestionId   String @map("exam_question_id") @db.Uuid
   questionId       String @map("question_id") @db.Uuid
@@ -878,6 +1117,7 @@ model ExamResponse {
   isFlagged Boolean? @default(false) @map("is_flagged")
   isSkipped Boolean? @default(false) @map("is_skipped")
 
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
   examAssignment ExamAssignment @relation(fields: [examAssignmentId], references: [id], onDelete: Cascade)
   examQuestion   ExamQuestion   @relation(fields: [examQuestionId], references: [id])
   question       Question       @relation(fields: [questionId], references: [id])
@@ -885,11 +1125,13 @@ model ExamResponse {
 
   @@unique([examAssignmentId, examQuestionId])
   @@index([examAssignmentId])
+  @@index([tenantId])
   @@map("exam_responses")
 }
 
 model ExamSession {
   id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String @map("tenant_id") @db.Uuid
   examAssignmentId String @map("exam_assignment_id") @db.Uuid
 
   /// { model, os_version, app_version, screen_size }
@@ -909,9 +1151,11 @@ model ExamSession {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
   examAssignment ExamAssignment @relation(fields: [examAssignmentId], references: [id])
 
   @@index([examAssignmentId])
+  @@index([tenantId])
   @@map("exam_sessions")
 }
 
@@ -921,6 +1165,7 @@ model ExamSession {
 
 model PerformanceSnapshot {
   id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
   employeeId String @map("employee_id") @db.Uuid
   month      Int
   year       Int
@@ -945,15 +1190,18 @@ model PerformanceSnapshot {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
   employee Employee @relation(fields: [employeeId], references: [id])
 
   @@unique([employeeId, month, year])
   @@index([employeeId, year, month])
+  @@index([tenantId, employeeId, year, month])
   @@map("performance_snapshots")
 }
 
 model Certificate {
   id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
   employeeId String  @map("employee_id") @db.Uuid
   examId     String? @map("exam_id") @db.Uuid
 
@@ -961,7 +1209,7 @@ model Certificate {
   title             String          @db.VarChar(255)
   description       String?
   certificateUrl    String?         @map("certificate_url")
-  certificateNumber String?         @unique @map("certificate_number") @db.VarChar(50)
+  certificateNumber String?         @map("certificate_number") @db.VarChar(50)
 
   issuedAt   DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
   issuedById String?   @map("issued_by") @db.Uuid
@@ -969,16 +1217,20 @@ model Certificate {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
   employee Employee @relation(fields: [employeeId], references: [id])
   exam     Exam?    @relation(fields: [examId], references: [id])
   issuedBy User?    @relation("CertificateIssuedBy", fields: [issuedById], references: [id])
 
+  @@unique([tenantId, certificateNumber])
   @@index([employeeId])
+  @@index([tenantId])
   @@map("certificates")
 }
 
 model Reward {
   id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
   employeeId String @map("employee_id") @db.Uuid
 
   type        RewardType
@@ -994,15 +1246,18 @@ model Reward {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
   employee  Employee @relation(fields: [employeeId], references: [id])
   awardedBy User?    @relation("RewardAwardedBy", fields: [awardedById], references: [id])
 
   @@index([employeeId])
+  @@index([tenantId])
   @@map("rewards")
 }
 
 model TrainingAssignment {
   id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
   employeeId String @map("employee_id") @db.Uuid
 
   topicId          String? @map("topic_id") @db.Uuid
@@ -1025,6 +1280,7 @@ model TrainingAssignment {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
   employee       Employee        @relation(fields: [employeeId], references: [id])
   topic          Topic?          @relation(fields: [topicId], references: [id])
   sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id])
@@ -1032,11 +1288,13 @@ model TrainingAssignment {
   triggeringExam Exam?           @relation("TrainingTriggeringExam", fields: [triggeringExamId], references: [id])
 
   @@index([employeeId])
+  @@index([tenantId])
   @@map("training_assignments")
 }
 
 model SupervisorRemark {
   id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
   employeeId String @map("employee_id") @db.Uuid
 
   remarkType RemarkType @map("remark_type")
@@ -1047,11 +1305,13 @@ model SupervisorRemark {
   createdById String   @map("created_by") @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
   employee    Employee @relation(fields: [employeeId], references: [id])
   relatedExam Exam?    @relation(fields: [relatedExamId], references: [id])
   createdBy   User     @relation("RemarkCreatedBy", fields: [createdById], references: [id])
 
   @@index([employeeId])
+  @@index([tenantId])
   @@map("supervisor_remarks")
 }
 
@@ -1060,8 +1320,9 @@ model SupervisorRemark {
 // ---------------------------------------------------------------------------
 
 model AuditLog {
-  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String? @map("user_id") @db.Uuid
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  userId   String? @map("user_id") @db.Uuid
   /// e.g. 'employee.create', 'exam.grade', 'question.approve'
   action     String  @db.VarChar(100)
   entityType String  @map("entity_type") @db.VarChar(50)
@@ -1075,17 +1336,20 @@ model AuditLog {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User? @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
 
   @@index([entityType, entityId])
   @@index([userId])
   @@index([createdAt])
+  @@index([tenantId, entityType, entityId])
   @@map("audit_logs")
 }
 
 model Notification {
-  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String @map("user_id") @db.Uuid
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  userId   String @map("user_id") @db.Uuid
 
   type  NotificationType
   title String           @db.VarChar(255)
@@ -1105,21 +1369,28 @@ model Notification {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
 
   @@index([userId, isRead])
+  @@index([tenantId, userId, isRead])
   @@map("notifications")
 }
 
+/// Keyed by (tenantId, key): every tenant configures itself independently, so
+/// a bare `key` primary key would let one customer's setting overwrite another's.
 model Setting {
-  key         String   @id @db.VarChar(100)
+  tenantId    String   @map("tenant_id") @db.Uuid
+  key         String   @db.VarChar(100)
   value       Json
   description String?
   updatedById String?  @map("updated_by") @db.Uuid
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  updatedBy User? @relation("SettingUpdatedBy", fields: [updatedById], references: [id])
+  tenant    Tenant @relation(fields: [tenantId], references: [id])
+  updatedBy User?  @relation("SettingUpdatedBy", fields: [updatedById], references: [id])
 
+  @@id([tenantId, key])
   @@map("settings")
 }
 

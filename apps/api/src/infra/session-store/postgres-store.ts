@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { runAsPlatform } from '@bookends/db'
 import type { Role } from '@bookends/core'
 import type { Principal, SessionStore } from './index.js'
 
@@ -9,8 +10,24 @@ import type { Principal, SessionStore } from './index.js'
  * ~300 staff the load is nowhere near needing it. The SessionStore interface
  * exists so a Redis implementation drops in later without touching callers.
  * (§2.1's BullMQ will force Redis in at Module 6 regardless.)
+ *
+ * ---------------------------------------------------------------------------
+ * Every query here is platform-scoped, and that is not a shortcut.
+ *
+ * This store runs during authenticate(), which is what ESTABLISHES the tenant —
+ * `touch` is literally the call that reads the tenantId the rest of the request
+ * will be scoped by. Requiring a tenant context here would be circular.
+ *
+ * It is safe because every method is keyed by a value the caller has already
+ * proven: a sessionId out of a signature-verified JWT, or a userId out of a
+ * resolved principal. None of them are attacker-chosen strings, and all are
+ * UUIDs unique across the platform.
+ * ---------------------------------------------------------------------------
  */
 const LAST_SEEN_THROTTLE_MS = 60_000
+
+/** Why these queries are allowed to see across tenants. */
+const SCOPE_REASON = 'session store: keyed by verified session/user ids, and resolves the tenant'
 
 export class PostgresSessionStore implements SessionStore {
   constructor(private readonly prisma: PrismaClient) {}
@@ -21,24 +38,28 @@ export class PostgresSessionStore implements SessionStore {
    * clock starts now.
    */
   async put(sessionId: string, _principal: Principal, _ttlSeconds: number): Promise<void> {
-    await this.prisma.userSession.update({
-      where: { id: sessionId },
-      data: { lastSeenAt: new Date() },
-    })
+    await runAsPlatform(SCOPE_REASON, () =>
+      this.prisma.userSession.update({
+        where: { id: sessionId },
+        data: { lastSeenAt: new Date() },
+      })
+    )
   }
 
   async touch(sessionId: string, ttlSeconds: number): Promise<Principal | null> {
-    const session = await this.prisma.userSession.findUnique({
-      where: { id: sessionId },
-      include: {
-        user: {
-          include: {
-            employee: { select: { id: true, outletId: true, departmentId: true } },
-            outletsManaged: { where: { isActive: true }, select: { id: true } },
+    const session = await runAsPlatform(SCOPE_REASON, () =>
+      this.prisma.userSession.findUnique({
+        where: { id: sessionId },
+        include: {
+          user: {
+            include: {
+              employee: { select: { id: true, outletId: true, departmentId: true } },
+              outletsManaged: { where: { isActive: true }, select: { id: true } },
+            },
           },
         },
-      },
-    })
+      })
+    )
 
     if (!session) return null
     if (session.revokedAt) return null
@@ -48,10 +69,12 @@ export class PostgresSessionStore implements SessionStore {
     // Idle timeout (§7.5): last activity older than the role's window ends it.
     const idleDeadline = new Date(Date.now() - ttlSeconds * 1000)
     if (session.lastSeenAt <= idleDeadline) {
-      await this.prisma.userSession.update({
-        where: { id: sessionId },
-        data: { revokedAt: new Date(), revokedReason: 'idle_timeout' },
-      })
+      await runAsPlatform(SCOPE_REASON, () =>
+        this.prisma.userSession.update({
+          where: { id: sessionId },
+          data: { revokedAt: new Date(), revokedReason: 'idle_timeout' },
+        })
+      )
       return null
     }
 
@@ -59,14 +82,17 @@ export class PostgresSessionStore implements SessionStore {
     // API call for no benefit, since the idle window is measured in minutes.
     const now = Date.now()
     if (now - session.lastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
-      await this.prisma.userSession.update({
-        where: { id: sessionId },
-        data: { lastSeenAt: new Date(now) },
-      })
+      await runAsPlatform(SCOPE_REASON, () =>
+        this.prisma.userSession.update({
+          where: { id: sessionId },
+          data: { lastSeenAt: new Date(now) },
+        })
+      )
     }
 
     return {
       userId: session.userId,
+      tenantId: session.tenantId,
       role: session.user.role as Role,
       sessionId: session.id,
       employeeId: session.user.employee?.id ?? null,
@@ -78,17 +104,21 @@ export class PostgresSessionStore implements SessionStore {
   }
 
   async delete(sessionId: string): Promise<void> {
-    await this.prisma.userSession.updateMany({
-      where: { id: sessionId, revokedAt: null },
-      data: { revokedAt: new Date(), revokedReason: 'logout' },
-    })
+    await runAsPlatform(SCOPE_REASON, () =>
+      this.prisma.userSession.updateMany({
+        where: { id: sessionId, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'logout' },
+      })
+    )
   }
 
   async deleteAllForUser(userId: string): Promise<void> {
-    await this.prisma.userSession.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date(), revokedReason: 'admin_revoke' },
-    })
+    await runAsPlatform(SCOPE_REASON, () =>
+      this.prisma.userSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'admin_revoke' },
+      })
+    )
   }
 
   async invalidatePrincipal(_userId: string): Promise<void> {

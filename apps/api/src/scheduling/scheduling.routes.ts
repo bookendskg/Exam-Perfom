@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { currentTenantId } from '@bookends/db'
 import { ok } from '@bookends/core'
 import type { Deps } from '../app.js'
 import { validate } from '../http/middleware/validate.js'
@@ -97,7 +98,9 @@ export function buildSchedulingRouter(deps: Deps) {
 
           const config = existing
             ? await deps.prisma.examScheduleConfig.update({ where: { id: existing.id }, data })
-            : await deps.prisma.examScheduleConfig.create({ data })
+            : await deps.prisma.examScheduleConfig.create({
+                data: { ...data, tenantId: currentTenantId() },
+              })
 
           res.json(ok(config))
         } catch (err) {

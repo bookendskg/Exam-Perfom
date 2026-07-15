@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { formatEmployeeCode, parseEmployeeCode } from '../src/employees/employee-code.js'
 
@@ -51,7 +51,7 @@ afterAll(async () => {
 
 async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const { phone, password } = await makeUser({ mustChangePassword: false, ...opts })
-  const res = await request(app).post('/api/v1/auth/login').send({ phone, password })
+  const res = await request(app).post('/api/v1/auth/login').send({ tenantSlug: TEST_TENANT_SLUG, phone, password })
   expect(res.status, `login failed: ${JSON.stringify(res.body)}`).toBe(200)
   return res.body.data.accessToken as string
 }
@@ -70,17 +70,26 @@ const newEmployee = (over: Record<string, unknown> = {}) => ({
 
 describe('§8.2 employee code', () => {
   it('formats as BK-{OUTLET}-{SEQ}, zero-padded to 3', () => {
-    expect(formatEmployeeCode('AK', 1)).toBe('BK-AK-001')
-    expect(formatEmployeeCode('CP', 42)).toBe('BK-CP-042')
-    expect(formatEmployeeCode('PR', 15)).toBe('BK-PR-015')
+    // The prefix is the tenant's now, not the constant "BK" — Bookends' happens
+    // to be BK, and another customer's will not be.
+    expect(formatEmployeeCode('BK', 'AK', 1)).toBe('BK-AK-001')
+    expect(formatEmployeeCode('BK', 'CP', 42)).toBe('BK-CP-042')
+    expect(formatEmployeeCode('BK', 'PR', 15)).toBe('BK-PR-015')
+  })
+
+  it('carries each tenant’s own prefix, so two customers never collide', () => {
+    expect(formatEmployeeCode('HS', 'AK', 1)).toBe('HS-AK-001')
   })
 
   it('does not truncate past 999', () => {
-    expect(formatEmployeeCode('AK', 1000)).toBe('BK-AK-1000')
+    expect(formatEmployeeCode('BK', 'AK', 1000)).toBe('BK-AK-1000')
   })
 
   it('round-trips through the parser', () => {
-    expect(parseEmployeeCode('BK-AK-001')).toEqual({ outletCode: 'AK', sequence: 1 })
+    expect(parseEmployeeCode('BK-AK-001')).toEqual({ prefix: 'BK', outletCode: 'AK', sequence: 1 })
+    // Parses another tenant's prefix too: the parser has the code but not
+    // necessarily the tenant that minted it.
+    expect(parseEmployeeCode('HS-CP-042')).toEqual({ prefix: 'HS', outletCode: 'CP', sequence: 42 })
     expect(parseEmployeeCode('not-a-code')).toBeNull()
   })
 
@@ -203,7 +212,7 @@ describe('§8.1 create employee', () => {
     // reconstructing it — that also asserts the two agree.
     const login = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: '9876500012', password: created.body.data.temporaryPassword })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: '9876500012', password: created.body.data.temporaryPassword })
     expect(login.status).toBe(200)
     // The default is derived from a publicly-known phone number, so the first
     // login must force a change.
@@ -341,7 +350,7 @@ describe('§8.4 status transitions', () => {
     // The employee logs in…
     const theirLogin = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: '9876500021', password: '0021book' })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: '9876500021', password: '0021book' })
     expect(theirLogin.status).toBe(200)
 
     await setStatus(admin, emp.id, 'terminated').expect(200)
@@ -355,7 +364,7 @@ describe('§8.4 status transitions', () => {
 
     const relogin = await request(app)
       .post('/api/v1/auth/login')
-      .send({ phone: '9876500021', password: '0021book' })
+      .send({ tenantSlug: TEST_TENANT_SLUG, phone: '9876500021', password: '0021book' })
     expect(relogin.status).toBe(401)
   })
 

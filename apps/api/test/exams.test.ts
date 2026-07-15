@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
 import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
+import { truncateAll, disconnectDb, testDb , testTenantId , TEST_TENANT_SLUG } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { formatExamCode, parseExamCode } from '../src/exams/exam-code.js'
 
@@ -25,7 +25,7 @@ beforeEach(async () => {
     db.designation.findFirstOrThrow({ where: { code: 'LCOOK' } }),
   ])
   const topic = await db.topic.create({
-    data: { nameEn: 'Food Safety', departmentId: kitchen.id },
+    data: { tenantId: testTenantId(), nameEn: 'Food Safety', departmentId: kitchen.id },
   })
 
   ctx = {
@@ -45,7 +45,7 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
   const made = await makeUser({ mustChangePassword: false, ...opts })
   const res = await request(app)
     .post('/api/v1/auth/login')
-    .send({ phone: made.phone, password: made.password })
+    .send({ tenantSlug: TEST_TENANT_SLUG, phone: made.phone, password: made.password })
   expect(res.status, `login failed: ${JSON.stringify(res.body)}`).toBe(200)
   return { token: res.body.data.accessToken as string, ...made }
 }
@@ -64,7 +64,7 @@ async function seedQuestions(
   const ids: string[] = []
   for (let i = 0; i < count; i++) {
     const q = await testDb().question.create({
-      data: {
+      data: { tenantId: testTenantId(),
         type: 'mcq',
         difficulty: over.difficulty ?? 'easy',
         topicId: ctx.topic,

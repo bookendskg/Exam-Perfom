@@ -139,6 +139,11 @@ export class QuestionService {
         // Named explicitly, not left to the spread: these are the NOT NULL
         // columns, and stating them here is what lets the compiler confirm the
         // insert is complete rather than trusting an untyped bag of keys.
+        //
+        // tenantId especially. The cast above erases the compiler's check that
+        // it is present, so the type system cannot catch its absence here —
+        // only the tenant extension can, at runtime, as a 500.
+        tenantId: principal.tenantId,
         type: input.type,
         departmentId: input.departmentId,
         questionTextEn: input.questionTextEn,
@@ -257,6 +262,7 @@ export class QuestionService {
 
       await tx.questionReview.create({
         data: {
+          tenantId: principal.tenantId,
           questionId: id,
           reviewerId: principal.userId,
           action: 'approved',
@@ -288,6 +294,7 @@ export class QuestionService {
 
       await tx.questionReview.create({
         data: {
+          tenantId: principal.tenantId,
           questionId: id,
           reviewerId: principal.userId,
           action: 'rejected',

@@ -11,7 +11,24 @@ const phone = z
   .min(6, 'Phone number is required')
   .max(15, 'Phone number is too long')
 
+/**
+ * Which organisation is being logged into (SaaS §2.3).
+ *
+ * Optional here because it is only one of three ways to say so — the subdomain
+ * ({slug}.examhub.com) and the X-Tenant-ID header are the others, and a browser
+ * on a tenant subdomain should not have to repeat itself in the body. The route
+ * requires that *one* of them resolved; the schema cannot know which.
+ */
+const tenantSlug = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z0-9-]+$/i, 'Organisation identifier is invalid')
+  .optional()
+
 export const loginSchema = z.object({
+  tenantSlug,
   phone,
   // No length rule here: rejecting a short password at the schema would tell an
   // attacker the policy before authentication, and legitimate short passwords
@@ -38,7 +55,7 @@ export const changePasswordSchema = z.object({
   newPassword: z.string().min(1, 'New password is required'),
 })
 
-export const forgotPasswordSchema = z.object({ phone })
+export const forgotPasswordSchema = z.object({ tenantSlug, phone })
 
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'Reset token is required'),

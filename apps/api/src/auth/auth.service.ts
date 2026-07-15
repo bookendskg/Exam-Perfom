@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
+import { runAsPlatform, runInTenant } from '@bookends/db'
 import {
   hashPassword,
   verifyPassword,
@@ -30,8 +31,12 @@ interface Attempt {
 
 export class AuthService {
   /**
-   * Keyed by phone. In-process, which is honest for a single instance; when the
-   * API scales out this must move to the same durable store as sessions.
+   * Keyed by `${tenantId}:${phone}`, not phone alone: the same number can be a
+   * real account at two customers, and letting one tenant's failed attempts lock
+   * the other's account is a cross-tenant denial of service.
+   *
+   * In-process, which is honest for a single instance; when the API scales out
+   * this must move to the same durable store as sessions.
    */
   private readonly attempts = new Map<string, Attempt>()
 
@@ -42,25 +47,29 @@ export class AuthService {
     private readonly now: () => number = () => Date.now()
   ) {}
 
-  private checkLock(phone: string): void {
-    const attempt = this.attempts.get(phone)
+  private lockKey(tenantId: string, phone: string): string {
+    return `${tenantId}:${phone}`
+  }
+
+  private checkLock(key: string): void {
+    const attempt = this.attempts.get(key)
     if (attempt && attempt.lockedUntilMs > this.now()) {
       throw ApiError.accountLocked((attempt.lockedUntilMs - this.now()) / 1000)
     }
   }
 
-  private recordFailure(phone: string): void {
-    const attempt = this.attempts.get(phone) ?? { count: 0, lockedUntilMs: 0 }
+  private recordFailure(key: string): void {
+    const attempt = this.attempts.get(key) ?? { count: 0, lockedUntilMs: 0 }
     attempt.count += 1
     if (attempt.count >= MAX_FAILED_ATTEMPTS) {
       attempt.lockedUntilMs = this.now() + LOCKOUT_MS
       attempt.count = 0
     }
-    this.attempts.set(phone, attempt)
+    this.attempts.set(key, attempt)
   }
 
-  private clearFailures(phone: string): void {
-    this.attempts.delete(phone)
+  private clearFailures(key: string): void {
+    this.attempts.delete(key)
   }
 
   /**
@@ -69,30 +78,43 @@ export class AuthService {
    * Every failure path returns the identical INVALID_CREDENTIALS — unknown
    * phone, wrong password, and deactivated account are indistinguishable to a
    * caller. Anything else enumerates which of the ~300 staff numbers exist.
+   *
+   * The tenant is a parameter, resolved from the request before we get here
+   * (tenant/tenant.resolver.ts). It is not derived from the phone: looking up
+   * "which organisations employ this number" would answer, unauthenticated,
+   * precisely the question the dummy-verify below exists to refuse.
    */
-  async login(phone: string, password: string, device: DeviceContext): Promise<IssuedSession> {
-    this.checkLock(phone)
+  async login(
+    tenantId: string,
+    phone: string,
+    password: string,
+    device: DeviceContext
+  ): Promise<IssuedSession> {
+    const key = this.lockKey(tenantId, phone)
+    this.checkLock(key)
 
-    const user = await this.prisma.user.findUnique({ where: { phone } })
+    const user = await this.prisma.user.findUnique({
+      where: { tenantId_phone: { tenantId, phone } },
+    })
 
     if (!user) {
       // Burn the same CPU a real argon2 verify would. Without this, "unknown
       // phone" returns in ~1ms and "wrong password" in ~50ms, and the gap is a
       // user-enumeration oracle.
       await verifyAgainstDummy(password)
-      this.recordFailure(phone)
+      this.recordFailure(key)
       throw ApiError.invalidCredentials()
     }
 
     const valid = await verifyPassword(password, user.passwordHash)
     if (!valid || !user.isActive) {
-      this.recordFailure(phone)
+      this.recordFailure(key)
       throw ApiError.invalidCredentials()
     }
 
-    this.clearFailures(phone)
+    this.clearFailures(key)
 
-    const issued = await this.sessions.issue(user.id, user.role as Role, device)
+    const issued = await this.sessions.issue(user.tenantId, user.id, user.role as Role, device)
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
@@ -157,8 +179,10 @@ export class AuthService {
    * would turn this endpoint into the account-enumeration oracle that the login
    * timing work exists to prevent.
    */
-  async forgotPassword(phone: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({ where: { phone } })
+  async forgotPassword(tenantId: string, phone: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { tenantId_phone: { tenantId, phone } },
+    })
     if (!user || !user.isActive) return
 
     const token = randomBytes(32).toString('base64url')
@@ -183,9 +207,15 @@ export class AuthService {
    * have been compromised, so nothing that was signed in before survives.
    */
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    const user = await this.prisma.user.findFirst({
-      where: { passwordResetTokenHash: hashResetToken(token) },
-    })
+    // Platform-scoped, and deliberately so: the token arrives on its own, from
+    // an email link that carries no tenant, so there is no context to scope to.
+    // Safe because passwordResetTokenHash is globally unique (see schema) — it
+    // identifies exactly one user across the platform or nobody at all.
+    const user = await runAsPlatform('password reset: keyed by a globally-unique token', () =>
+      this.prisma.user.findFirst({
+        where: { passwordResetTokenHash: hashResetToken(token) },
+      })
+    )
 
     if (!user || !user.passwordResetExpiresAt || !user.isActive) {
       throw ApiError.validation('Invalid or expired reset token', [
@@ -204,19 +234,25 @@ export class AuthService {
       throw ApiError.validation('Password does not meet requirements', violations)
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash: await hashPassword(newPassword),
-        passwordChangedAt: new Date(),
-        mustChangePassword: false,
-        // Single-use: clearing the hash makes a replay of this token fail.
-        passwordResetTokenHash: null,
-        passwordResetExpiresAt: null,
-      },
-    })
+    // The token told us who they are, and therefore which tenant. Everything
+    // from here is an ordinary tenant write, so scope it rather than stay on
+    // the platform hatch a moment longer than the lookup needed it.
+    const passwordHash = await hashPassword(newPassword)
+    await runInTenant(user.tenantId, async () => {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          passwordChangedAt: new Date(),
+          mustChangePassword: false,
+          // Single-use: clearing the hash makes a replay of this token fail.
+          passwordResetTokenHash: null,
+          passwordResetExpiresAt: null,
+        },
+      })
 
-    await this.sessions.revokeAllForUser(user.id, 'password_reset')
+      await this.sessions.revokeAllForUser(user.id, 'password_reset')
+    })
   }
 }
 
