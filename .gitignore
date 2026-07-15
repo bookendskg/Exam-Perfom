@@ -44,3 +44,4 @@ coverage/
 # Local database volumes
 pgdata/
 redis-data/
+.dev-db/

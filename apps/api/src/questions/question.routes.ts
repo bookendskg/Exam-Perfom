@@ -355,6 +355,8 @@ export function buildQuestionRouters(deps: Deps) {
             .json(
               ok(
                 await documents.create(
+                  principal,
+                  scopeOf(req),
                   principal.userId,
                   req.valid!.body as CreateSourceDocumentInput
                 )
@@ -391,7 +393,16 @@ export function buildQuestionRouters(deps: Deps) {
       void (async () => {
         try {
           const { id } = req.valid!.params as { id: string }
-          res.json(ok(await documents.update(id, req.valid!.body as UpdateSourceDocumentInput)))
+          res.json(
+            ok(
+              await documents.update(
+                requirePrincipal(req),
+                scopeOf(req),
+                id,
+                req.valid!.body as UpdateSourceDocumentInput
+              )
+            )
+          )
         } catch (err) {
           next(err)
         }

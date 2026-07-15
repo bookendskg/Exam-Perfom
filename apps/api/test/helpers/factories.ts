@@ -42,9 +42,22 @@ export async function makeUser(opts: MakeUserOptions = {}) {
     const department = await prisma.department.findFirstOrThrow({ where: { code: 'KIT' } })
     const designation = await prisma.designation.findFirstOrThrow({ where: { code: 'LCOOK' } })
 
+    /**
+     * A real employee always has a §8.2 code — EmployeeService.create claims
+     * one from the outlet counter. The factory bypasses that path, so it claims
+     * one the same way, or fixtures drift from production: a test would see a
+     * null employeeCode that the live API can never produce.
+     */
+    const claimed = await prisma.outlet.update({
+      where: { id: outlet.id },
+      data: { lastEmployeeSeq: { increment: 1 } },
+      select: { code: true, lastEmployeeSeq: true },
+    })
+
     await prisma.employee.create({
       data: {
         userId: user.id,
+        employeeCode: `BK-${claimed.code}-${String(claimed.lastEmployeeSeq).padStart(3, '0')}`,
         firstName: 'Test',
         lastName: 'User',
         phone,

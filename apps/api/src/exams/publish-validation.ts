@@ -89,14 +89,23 @@ export class PublishValidator {
       })
     }
 
-    // §11.3: all assigned employees must be active
-    const inactive = exam.assignments.filter((a) =>
-      ['terminated', 'resigned', 'suspended'].includes(a.employee.employmentStatus)
-    )
+    /**
+     * §11.3: "All assigned employees must be active".
+     *
+     * §8.4's enum has five statuses and only ONE of them is active — so this is
+     * an allowlist, not a denylist. Listing the bad ones missed `on_leave`
+     * entirely: an employee on leave is not active, and scheduling them to sit
+     * an exam they cannot attend marks them absent and drags down §9's record
+     * through no fault of their own.
+     */
+    const inactive = exam.assignments.filter((a) => a.employee.employmentStatus !== 'active')
     if (inactive.length > 0) {
+      const byStatus = [...new Set(inactive.map((a) => a.employee.employmentStatus))]
       errors.push({
         field: 'assignments',
-        message: `${inactive.length} assigned ${inactive.length === 1 ? 'employee has' : 'employees have'} left or are suspended`,
+        message:
+          `${inactive.length} assigned ${inactive.length === 1 ? 'employee is' : 'employees are'} ` +
+          `not active (${byStatus.join(', ')}). §11.3 requires every assignee be active.`,
       })
     }
 

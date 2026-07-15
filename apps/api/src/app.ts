@@ -16,10 +16,13 @@ import { requirePasswordChange } from './auth/middleware/require-password-change
 import { buildAuthRouter } from './auth/auth.routes.js'
 import { buildEmployeeRouter } from './employees/employee.routes.js'
 import { buildStaffRouter } from './staff/staff.routes.js'
+import { buildStaffExamRouter } from './staff-exams/staff-exam.routes.js'
 import { buildOrganisationRouters } from './organisation/organisation.routes.js'
 import { buildQuestionRouters } from './questions/question.routes.js'
 import { buildExamRouters } from './exams/exam.routes.js'
 import { buildSchedulingRouter } from './scheduling/scheduling.routes.js'
+import { buildGradingRouter } from './grading/grading.routes.js'
+import { buildAnalyticsRouter } from './analytics/analytics.routes.js'
 
 /**
  * Everything the app needs, passed in rather than imported. Tests inject a
@@ -85,6 +88,8 @@ export function buildApp(deps: Deps): Application {
   app.use('/api/v1', requireAuth, roleLimiter(), requirePasswordChange())
 
   app.use('/api/v1/employees', buildEmployeeRouter(deps))
+  // Mounted before /staff so /staff/exams is not swallowed by it.
+  app.use('/api/v1/staff/exams', buildStaffExamRouter(deps))
   app.use('/api/v1/staff', buildStaffRouter(deps))
 
   const { outletRouter, departmentRouter, designationRouter } = buildOrganisationRouters(deps)
@@ -101,6 +106,8 @@ export function buildApp(deps: Deps): Application {
   app.use('/api/v1/exam-templates', templateRouter)
   app.use('/api/v1/exams', examRouter)
   app.use('/api/v1/exam-schedule-config', buildSchedulingRouter(deps))
+  app.use('/api/v1/grading', buildGradingRouter(deps))
+  app.use('/api/v1/analytics', buildAnalyticsRouter(deps))
 
   app.use(notFoundHandler)
   app.use(errorHandler(logger))

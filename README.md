@@ -64,20 +64,50 @@ There is no `docker-compose.yml` — point `DATABASE_URL` at any Postgres you ha
 
 ### Setup
 
+No Postgres installed? `npm run dev:db` downloads and runs one — no Docker, no install.
+
 ```bash
 npm install
 cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
-npm run db:migrate
-npm run db:seed           # loads outlets, departments, designations
-npm run build
+
+npm run dev:db            # terminal 1 — starts PostgreSQL, prints the DATABASE_URL
+npm run db:migrate        # terminal 2 — create the tables
+npm run db:seed           # outlets, departments, designations
+npm run dev               # start the API on http://localhost:4000
 ```
 
-### Running
+The database must be **UTF8**. Hindi and Gujarati content (§6) cannot be stored
+in a single-byte encoding, and the API refuses to boot against one. `dev:db`
+handles this; for a real database, create it explicitly:
+
+```sql
+CREATE DATABASE bookends WITH ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+```
+
+### What you can see today
+
+**There is no user interface yet** — the admin panel (React) and the staff
+Android app are not built. The API answers JSON:
 
 ```bash
-npm run dev               # API
+curl http://localhost:4000/api/v1/health
+
+# Log in as the seeded super admin, then change the password it forces (§7.3)
+curl -X POST http://localhost:4000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"9876543210","password":"..."}'
+```
+
+Seed a super admin first with `SEED_ADMIN_PHONE` and `SEED_ADMIN_PASSWORD`
+(see below). Every other endpoint needs that token.
+
+### Other commands
+
+```bash
 npm test                  # full suite — no Docker, no Redis required
 npm run lint
+npm run build
+npm run db:studio         # browse the database in a GUI
 ```
 
 ### Seeding a first admin

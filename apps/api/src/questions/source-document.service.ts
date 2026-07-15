@@ -1,6 +1,9 @@
 import type { PrismaClient } from '@bookends/db'
+import type { Scope } from '@bookends/core'
 import { z } from 'zod'
 import { ApiError } from '../http/api-error.js'
+import type { Principal } from '../infra/session-store/index.js'
+import { assertInScope, assertCreateInScope } from '../rbac/scope.js'
 
 /**
  * §4.1 source documents — the cookbooks, SOPs and manuals questions are drawn
@@ -101,7 +104,21 @@ export class SourceDocumentService {
     return document
   }
 
-  async create(uploadedById: string, input: CreateSourceDocumentInput) {
+  /**
+   * Scope is enforced here, not just at the route.
+   *
+   * `source_document:manage` grants an outlet_manager `own_outlet`, and the
+   * route gate only checks they hold SOME scope — it cannot know which document
+   * they are touching. Without assertCreateInScope an outlet_manager could file
+   * a document under another outlet, or under NULL (= every outlet).
+   */
+  async create(
+    principal: Principal,
+    scope: Scope,
+    uploadedById: string,
+    input: CreateSourceDocumentInput
+  ) {
+    assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
     await this.assertRefs(input.outletId, input.departmentId)
 
     return this.prisma.sourceDocument.create({
@@ -119,14 +136,24 @@ export class SourceDocumentService {
     })
   }
 
-  async update(id: string, input: UpdateSourceDocumentInput) {
+  async update(principal: Principal, scope: Scope, id: string, input: UpdateSourceDocumentInput) {
     const existing = await this.prisma.sourceDocument.findUnique({
       where: { id },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, outletId: true, uploadedById: true },
     })
     if (!existing) throw ApiError.notFound('Source document not found')
 
+    // 'write' mode: a document with outletId NULL applies to every outlet, so
+    // an outlet_manager must not edit it — the same rule questions follow.
+    // Without this an outlet_manager could rewrite or deactivate a shared SOP
+    // that questions across all three outlets cite.
+    assertInScope(scope, principal, existing, 'write')
     await this.assertRefs(input.outletId, input.departmentId)
+
+    // Moving a document into or out of global scope is itself a scope change.
+    if (input.outletId !== undefined) {
+      assertCreateInScope(scope, principal, { outletId: input.outletId })
+    }
 
     if (input.isActive === false && existing.isActive) {
       const live = await this.prisma.question.count({

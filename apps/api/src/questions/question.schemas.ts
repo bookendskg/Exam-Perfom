@@ -72,18 +72,29 @@ const mcqOption = z.object({
   imageUrl: z.string().url().optional(),
 })
 
+/**
+ * §10.1's option rules, defined ONCE.
+ *
+ * The update schema previously re-declared this as a bare `.array(mcqOption)
+ * .length(4)` and silently lost both refinements — so a PATCH could store an
+ * MCQ with zero or two correct answers. With zero, correctOptionId() returns
+ * null at grading time, every candidate is marked wrong, and negative marking
+ * penalises them for a question that had no right answer.
+ */
+const mcqOptions = z
+  .array(mcqOption)
+  // §10.1: "4 options (A, B, C, D)".
+  .length(4, 'An MCQ must have exactly 4 options')
+  .refine((opts) => opts.filter((o) => o.isCorrect).length === 1, {
+    message: 'An MCQ must have exactly one correct option',
+  })
+  .refine((opts) => new Set(opts.map((o) => o.id)).size === opts.length, {
+    message: 'Option ids must be unique',
+  })
+
 const mcqQuestion = baseQuestion.extend({
   type: z.literal('mcq'),
-  options: z
-    .array(mcqOption)
-    // §10.1: "4 options (A, B, C, D)".
-    .length(4, 'An MCQ must have exactly 4 options')
-    .refine((opts) => opts.filter((o) => o.isCorrect).length === 1, {
-      message: 'An MCQ must have exactly one correct option',
-    })
-    .refine((opts) => new Set(opts.map((o) => o.id)).size === opts.length, {
-      message: 'Option ids must be unique',
-    }),
+  options: mcqOptions,
   /** §10.1 supports negative marking, configurable per question. */
   negativeMarks: z.coerce.number().min(0).max(999).optional(),
 })
@@ -196,7 +207,7 @@ export const updateQuestionSchema = z
     marks: z.coerce.number().positive().max(999).optional(),
     negativeMarks: z.coerce.number().min(0).max(999).optional(),
     timeLimitSeconds: z.coerce.number().int().positive().max(3600).nullable().optional(),
-    options: z.array(mcqOption).length(4).optional(),
+    options: mcqOptions.optional(),
     expectedAnswerEn: z.string().trim().optional(),
     expectedAnswerHi: z.string().trim().optional(),
     expectedAnswerGu: z.string().trim().optional(),
