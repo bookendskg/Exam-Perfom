@@ -108,6 +108,12 @@ On a brand-new database, run the script **again** after the first migration:
 the first pass cannot revoke access to `_prisma_migrations` before Prisma has
 created it. The script detects this and says so.
 
+**Always migrate as the migrator** (`npm run db:migrate`, which uses
+`MIGRATE_DATABASE_URL`). `ALTER DEFAULT PRIVILEGES` is keyed to the role that
+*creates* a table, so a migration applied as `postgres` produces tables the app
+role cannot read — a `permission denied` that appears only when some later code
+touches the new table. Re-running `provision-roles.sql` repairs it.
+
 The database must be **UTF8**. Hindi and Gujarati content (§6) cannot be stored
 in a single-byte encoding, and the API refuses to boot against one. `dev:db`
 handles this; for a real database, create it explicitly:

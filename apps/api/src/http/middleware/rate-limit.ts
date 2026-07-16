@@ -59,6 +59,40 @@ export function loginLimiter(): RateLimitRequestHandler {
   })
 }
 
+/**
+ * Signup limiter (§5.1). Deliberately per-HOUR, not per-minute like the others.
+ *
+ * Every other limiter here bounds a transient cost — a wasted query, a login
+ * attempt. Signup's cost is DURABLE: each success burns a slug forever, seeds
+ * ~25 rows, and puts a tenant in the auto-scheduler's loop. A 60-second window
+ * would let one source create 60 junk tenants an hour indefinitely and still be
+ * "within the limit".
+ *
+ * Five per hour per IP is generous for the real case — a person signing their
+ * company up does it once — and it makes squatting the interesting slugs a job
+ * rather than a script.
+ *
+ * This bounds abuse, it does not prevent it: nothing here proves the signer-up
+ * owns the email, because §14's mailer does not exist yet. Email verification
+ * is the actual answer and this is the holding measure until there is one.
+ */
+export function signupLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: 60 * 60_000,
+    limit: 5,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (req) => ipKey(req.ip),
+    // Successful signups are what we are limiting. A failed one (a taken slug,
+    // a weak password) is a mistake to correct, not an attack to punish — and
+    // counting it would lock someone out of their own third attempt.
+    skipFailedRequests: true,
+    handler: (_req, res) => {
+      res.status(429).json(rateLimited)
+    },
+  })
+}
+
 /** Bounds one source overall, so IP+phone keying cannot be farmed across accounts. */
 export function publicLimiter(): RateLimitRequestHandler {
   return rateLimit({

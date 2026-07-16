@@ -15,6 +15,8 @@ import { roleLimiter } from './http/middleware/rate-limit.js'
 import { markPublic } from './rbac/require-permission.js'
 import { requirePasswordChange } from './auth/middleware/require-password-change.js'
 import { tenantScope } from './tenant/tenant.middleware.js'
+import { buildPlatformRouter } from './platform/platform.routes.js'
+import { buildOnboardingRouter } from './onboarding/onboarding.routes.js'
 import { buildAuthRouter } from './auth/auth.routes.js'
 import { buildEmployeeRouter } from './employees/employee.routes.js'
 import { buildStaffRouter } from './staff/staff.routes.js'
@@ -87,6 +89,31 @@ export function buildApp(rawDeps: Deps): Application {
       throw new Error('boom: this internal detail must not reach the client')
     })
   }
+
+  /**
+   * §8.1's platform API, mounted OUTSIDE the tenant chain below.
+   *
+   * It must be: there is no tenant to resolve for an operator who acts across
+   * all of them, so tenantScope() would refuse every request. It carries its own
+   * guard (requirePlatformAuth) which verifies against PLATFORM_JWT_SECRET — a
+   * different secret, so a tenant token cannot reach these routes even if this
+   * mount were wrong.
+   *
+   * Note it gets the SCOPED prisma client like everything else. Platform code
+   * says runAsPlatform() explicitly where it means to see across tenants, rather
+   * than being handed an unguarded client and hoping.
+   */
+  app.use('/api/platform/v1', buildPlatformRouter(deps))
+
+  /**
+   * §5.1 signup. Public, and mounted above the auth chain because a caller
+   * creating a tenant has neither a session nor a tenant to be scoped to.
+   *
+   * It is the only unauthenticated write in the system. Its own guards are the
+   * signup rate limiter (per hour, not per minute — the cost of abuse here is
+   * durable) and the reserved-slug list.
+   */
+  app.use('/api/v1/signup', buildOnboardingRouter(deps))
 
   const { router: authRouter, requireAuth } = buildAuthRouter(deps)
   app.use('/api/v1/auth', authRouter)

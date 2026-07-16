@@ -19,6 +19,16 @@ const schema = z
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
     REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 
+    // §21.3. A DIFFERENT secret from JWT_SECRET, and the difference is the
+    // security boundary: it is what makes a tenant's token cryptographically
+    // unable to authenticate as a platform admin. Share them and the only thing
+    // separating a customer's admin from operator access over every tenant is a
+    // correct claim check — one `if` away from a total compromise.
+    PLATFORM_JWT_SECRET: z.string().default(''),
+    // Shorter than a tenant session (§7.2's 15 min): this token can read and
+    // suspend every customer, so a stolen one should die sooner.
+    PLATFORM_JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+
     // §7.5
     SESSION_STORE: z.enum(['postgres', 'memory']).default('postgres'),
     SESSION_IDLE_TTL_STAFF_SECONDS: z.coerce.number().int().positive().default(1800),
@@ -47,6 +57,30 @@ const schema = z
         message: 'SESSION_STORE=memory is not permitted in production; use postgres',
       })
     }
+
+    if (isProd && env.PLATFORM_JWT_SECRET.length < 32) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PLATFORM_JWT_SECRET'],
+        message: 'PLATFORM_JWT_SECRET must be at least 32 characters in production',
+      })
+    }
+
+    // Checked in EVERY environment, not just production — because the way this
+    // goes wrong is someone copying JWT_SECRET into the new variable to make a
+    // dev boot error go away, and never revisiting it. Identical secrets mean a
+    // tenant's access token verifies against the platform panel, and then only
+    // an application-level claim check stands between a customer's admin and
+    // every other customer's data. That is the exact failure this separation
+    // exists to make impossible, so refuse to run at all.
+    if (env.PLATFORM_JWT_SECRET && env.PLATFORM_JWT_SECRET === env.JWT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PLATFORM_JWT_SECRET'],
+        message:
+          'PLATFORM_JWT_SECRET must differ from JWT_SECRET. Sharing them lets a tenant token authenticate as a platform admin.',
+      })
+    }
   })
 
 export type Config = Readonly<
@@ -73,6 +107,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     // A dev-only fallback so `npm run dev` works from a bare checkout. The
     // superRefine above guarantees this branch is unreachable in production.
     JWT_SECRET: env.JWT_SECRET || 'dev-only-insecure-secret-do-not-use-in-production',
+    // Deliberately a DIFFERENT literal from the one above. If both defaults
+    // were the same string, a bare checkout would boot with the two secrets
+    // equal — the precise state the superRefine refuses — and every
+    // token-crossing test would pass for the wrong reason.
+    PLATFORM_JWT_SECRET:
+      env.PLATFORM_JWT_SECRET || 'dev-only-insecure-PLATFORM-secret-do-not-use-in-production',
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
     corsOrigins: env.CORS_ORIGINS.split(',')

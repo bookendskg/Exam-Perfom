@@ -114,6 +114,8 @@ const MUTABLE_TABLES = [
  * scope, because resolvePrincipal filters on isActive.
  */
 export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void> {
+  const anchorId = testTenantId()
+
   await prisma.$transaction([
     // Drops the outlets → users FK reference so users can be deleted, and
     // clears manager assignments a previous test may have stamped on.
@@ -122,45 +124,48 @@ export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void
     // on BK-AK-001 would depend on test execution order.
     prisma.$executeRawUnsafe(`UPDATE "outlets" SET "last_employee_seq" = 0`),
     ...MUTABLE_TABLES.map((t) => prisma.$executeRawUnsafe(`DELETE FROM "${t}"`)),
-    // Drop org rows a test created. Keyed on the seeded codes, which come from
-    // @bookends/db so they cannot drift from what the real seed writes.
-    prisma.$executeRawUnsafe(
-      `DELETE FROM "designations" WHERE "code" NOT IN (${sqlList(SEED_DESIGNATIONS.map((d) => d.code))})`
-    ),
-    prisma.$executeRawUnsafe(
-      `DELETE FROM "departments" WHERE "code" NOT IN (${sqlList(SEED_DEPARTMENTS.map((d) => d.code))})`
-    ),
-    prisma.$executeRawUnsafe(
-      `DELETE FROM "outlets" WHERE "code" NOT IN (${sqlList(SEED_OUTLETS.map((o) => o.code))})`
-    ),
   ])
 
-  // Drop every tenant a test invented, leaving only the anchor.
-  //
-  // Not cosmetic. Anything that legitimately iterates tenants — the
-  // auto-scheduling job does, per SaaS §7 — would otherwise pick up tenants
-  // left behind by tenant-isolation.test.ts and quietly do twice the work. That
-  // bug only appears when the files run in a particular order, and vitest
-  // reorders them between runs from its timing cache, so it surfaces as a suite
-  // that passes once and fails the next time for no visible reason.
-  //
-  // Safe to run after the deletes above: those already removed the child rows
-  // (their outlets and departments do not carry seeded codes), so nothing
-  // references these tenants by the time they go.
-  // Drop every tenant a test invented, and everything hanging off them.
-  //
-  // The org rows must go by TENANT, not by code. The deletes above key on
-  // "code not in the seeded list", which was right when there was one tenant and
-  // is wrong now: a second tenant reusing "AK" is the whole point of per-tenant
-  // uniqueness, so its outlet survives the code rule and then blocks its own
-  // tenant's delete on a foreign key. Leaf-first, same as MUTABLE_TABLES.
-  const anchorId = testTenantId()
+  /**
+   * Everything a test invented, in two passes — foreign tenants whole, then the
+   * anchor's own strays.
+   *
+   * FOREIGN TENANTS FIRST, and by TENANT rather than by code. The org deletes
+   * below key on "code not in the seeded list", which was right when there was
+   * one tenant and is wrong now: a signed-up tenant legitimately holds "KIT" and
+   * "MAIN", so a code rule either spares its rows (and then its tenant cannot be
+   * deleted — FK violation) or deletes the anchor's (and the suite loses its
+   * reference data). Neither is recoverable, so the two cases are separated.
+   *
+   * Leaf-first within each pass, same as MUTABLE_TABLES, because
+   * outlet_departments references both outlets and departments.
+   */
   const foreign = { tenantId: { not: anchorId } }
   await prisma.outletDepartment.deleteMany({ where: foreign })
   await prisma.designation.deleteMany({ where: foreign })
   await prisma.department.deleteMany({ where: foreign })
   await prisma.outlet.deleteMany({ where: foreign })
   await prisma.tenant.deleteMany({ where: { slug: { not: ANCHOR_TENANT.slug } } })
+
+  // Now the anchor's own: org rows a test created, keyed on the seeded codes
+  // from @bookends/db so they cannot drift from what the real seed writes.
+  // Scoped to the anchor explicitly — the pass above has already removed every
+  // other tenant, but saying so keeps the rule true rather than incidentally
+  // correct.
+  await prisma.$transaction([
+    prisma.outletDepartment.deleteMany({
+      where: { tenantId: anchorId, outlet: { code: { notIn: SEED_OUTLETS.map((o) => o.code) } } },
+    }),
+    prisma.designation.deleteMany({
+      where: { tenantId: anchorId, code: { notIn: SEED_DESIGNATIONS.map((d) => d.code) } },
+    }),
+    prisma.department.deleteMany({
+      where: { tenantId: anchorId, code: { notIn: SEED_DEPARTMENTS.map((d) => d.code) } },
+    }),
+    prisma.outlet.deleteMany({
+      where: { tenantId: anchorId, code: { notIn: SEED_OUTLETS.map((o) => o.code) } },
+    }),
+  ])
 
   // Restore the anchor's PLAN, and drop any plan a test invented.
   //
@@ -180,11 +185,6 @@ export async function truncateAll(prisma: PrismaClient = testDb()): Promise<void
   // Restores isActive, names, levels and the outlet/department mappings that a
   // test may have changed or deleted.
   await seedReferenceData(prisma, testTenantId())
-}
-
-/** The codes are compile-time constants from @bookends/db, never user input. */
-function sqlList(values: readonly string[]): string {
-  return values.map((v) => `'${v}'`).join(', ')
 }
 
 export async function disconnectDb(): Promise<void> {

@@ -35,6 +35,16 @@ enum SubscriptionStatus {
   suspended
 }
 
+/// §6.1's platform roles. Deliberately NOT the tenant `Role` enum: these two
+/// vocabularies must never be assignable to one another, and a shared enum is
+/// the first step toward a `role === 'super_admin'` check that passes for the
+/// wrong kind of admin.
+enum PlatformRole {
+  super_admin
+  support
+  finance
+}
+
 enum Language {
   en
   hi
@@ -249,6 +259,69 @@ model Plan {
   tenants Tenant[]
 
   @@map("plans")
+}
+
+/// A platform operator — you, not a customer (§6.1).
+///
+/// A separate table from `users`, and the separation is the security boundary,
+/// not tidiness. A platform admin sees EVERY tenant's data; a tenant user must
+/// never become one by accident. Keeping them in one table with a flag means a
+/// single missed check promotes a customer's admin to platform operator, so the
+/// two identities share no table, no role enum, and no JWT secret
+/// (PLATFORM_JWT_SECRET, §21.3) — a tenant token is cryptographically unable to
+/// authenticate here, even if the middleware is wired up wrong.
+model PlatformAdmin {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Globally unique: there is no tenant to scope it to.
+  email        String       @unique @db.VarChar(255)
+  passwordHash String       @map("password_hash") @db.VarChar(255)
+  name         String       @db.VarChar(200)
+  role         PlatformRole
+
+  isActive    Boolean   @default(true) @map("is_active")
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  auditLogs PlatformAuditLog[]
+
+  @@map("platform_admins")
+}
+
+/// Every platform action, permanently (§20.2).
+///
+/// This is the reason the panel is allowed to exist. Suspending a customer or
+/// changing their plan is invisible to them and irreversible in effect — the
+/// log is what makes it answerable afterwards. `adminId` is nullable ON DELETE
+/// SET NULL rather than cascading: removing an operator must not erase what
+/// they did.
+///
+/// NOT tenant-scoped, despite having a tenantId. It records actions ON tenants,
+/// by people who are outside every tenant — so it is deliberately absent from
+/// the tenant extension's model set, and a tenant can never read its own.
+model PlatformAuditLog {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adminId  String? @map("admin_id") @db.Uuid
+  /// Which tenant was acted upon. Null for platform-wide actions (plan edits).
+  targetTenantId String? @map("target_tenant_id") @db.Uuid
+
+  /// 'tenant.suspend', 'tenant.activate', 'tenant.plan_change', …
+  action  String @db.VarChar(100)
+  /// Before/after, the reason given, whatever the action needs to be auditable.
+  details Json?
+
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  admin PlatformAdmin? @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([targetTenantId, createdAt])
+  @@index([adminId])
+  @@index([action])
+  @@map("platform_audit_logs")
 }
 
 /// A customer organisation. Bookends Hospitality is tenant #1, not a special
