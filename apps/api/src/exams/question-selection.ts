@@ -1,4 +1,4 @@
-import { Prisma } from '@bookends/db'
+import { Prisma, currentTenantId, withHandWrittenTenantFilter } from '@bookends/db'
 import type { PrismaClient, QuestionType } from '@bookends/db'
 import { z } from 'zod'
 import { ApiError } from '../http/api-error.js'
@@ -107,12 +107,16 @@ export class QuestionSelector {
         // Random ordering so two exams from the same template are not
         // identical, and so §11.2's "count" is a genuine sample rather than
         // always the oldest N.
-        const found = await this.prisma.$queryRaw<Array<{ id: string; marks: string }>>`
-          SELECT id, marks::text FROM questions
-           WHERE ${where}
-           ORDER BY random()
-           LIMIT ${rule.count}
-        `
+        const found = await withHandWrittenTenantFilter(
+          'buildWhere emits tenant_id = currentTenantId() as its first clause',
+          () =>
+            this.prisma.$queryRaw<Array<{ id: string; marks: string }>>`
+              SELECT id, marks::text FROM questions
+               WHERE ${where}
+               ORDER BY random()
+               LIMIT ${rule.count}
+            `
+        )
 
         for (const q of found) {
           taken.add(q.id)
@@ -140,6 +144,21 @@ export class QuestionSelector {
     taken: Set<string>
   ): Prisma.Sql {
     const clauses: Prisma.Sql[] = [
+      /**
+       * FIRST, AND NEVER OPTIONAL.
+       *
+       * This query is raw SQL, so the tenant extension never sees it — it hooks
+       * $allModels, and $queryRaw is a client-level operation. Every other
+       * clause below is a filter; this one is the boundary, and nothing else in
+       * the stack will add it if it goes missing.
+       *
+       * Its absence was a live cross-tenant leak: with no department/outlet
+       * targeting the WHERE degraded to type + status across every customer's
+       * question bank, so an exam could be built from — and print — a rival's
+       * questions. See question-selection-isolation.test.ts, which fails loudly
+       * if this line is ever removed.
+       */
+      Prisma.sql`tenant_id = ${currentTenantId()}::uuid`,
       Prisma.sql`type = ${type}::"QuestionType"`,
       // §11.3: exams are built from approved questions only.
       Prisma.sql`status = 'approved'::"QuestionStatus"`,
@@ -164,6 +183,11 @@ export class QuestionSelector {
     // A NULL outlet_id means the question applies everywhere (§4.1), so an
     // outlet-targeted exam must draw on the global bank too — otherwise an
     // outlet with few questions of its own could never fill an exam.
+    //
+    // "Everywhere" means every outlet of THIS tenant. It used to mean every
+    // outlet on the platform, because this OR branch matched any global
+    // question and the tenant clause above did not exist — so the widest
+    // reach belonged to the one clause meant to be generous.
     if (target.outletId) {
       clauses.push(Prisma.sql`(outlet_id = ${target.outletId}::uuid OR outlet_id IS NULL)`)
     }

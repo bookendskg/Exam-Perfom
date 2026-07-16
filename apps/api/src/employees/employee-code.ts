@@ -1,4 +1,5 @@
 import type { Prisma } from '@bookends/db'
+import { withHandWrittenTenantFilter } from '@bookends/db'
 
 /**
  * Employee codes, per §8.2: {PREFIX}-{OUTLET_CODE}-{SEQUENTIAL_NUMBER}
@@ -56,13 +57,17 @@ export async function claimEmployeeCode(
   // is hand-written and load-bearing. Without it, passing another tenant's
   // outletId would increment THEIR counter and mint a code in their sequence.
   // Remove it only once RLS is enforcing the same thing underneath.
-  const rows = await tx.$queryRaw<Array<{ code: string; last_employee_seq: number }>>`
-    UPDATE outlets
-       SET last_employee_seq = last_employee_seq + 1
-     WHERE id = ${outletId}::uuid
-       AND tenant_id = ${tenantId}::uuid
-    RETURNING code, last_employee_seq
-  `
+  const rows = await withHandWrittenTenantFilter(
+    'UPDATE outlets ... WHERE tenant_id = $tenantId',
+    () =>
+      tx.$queryRaw<Array<{ code: string; last_employee_seq: number }>>`
+        UPDATE outlets
+           SET last_employee_seq = last_employee_seq + 1
+         WHERE id = ${outletId}::uuid
+           AND tenant_id = ${tenantId}::uuid
+        RETURNING code, last_employee_seq
+      `
+  )
 
   const row = rows[0]
   if (!row) throw new Error(`Outlet ${outletId} not found while claiming an employee code`)

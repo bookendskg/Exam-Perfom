@@ -60,6 +60,41 @@ export function currentScope(): TenantScope | undefined {
 }
 
 /**
+ * Raw SQL that carries its own `tenant_id` predicate, by hand.
+ *
+ * ---------------------------------------------------------------------------
+ * This is a signed statement, not a formality. Read before using it.
+ *
+ * The tenant extension cannot read your SQL. It can only see THAT you ran raw
+ * SQL, not whether you filtered. So it refuses raw queries by default, and this
+ * is the only way past — which makes the wrapper the place a reviewer looks, and
+ * `reason` the thing they check against the query.
+ *
+ * This exists because the default USED to be the opposite. Raw SQL sailed
+ * straight through unguarded, and question-selection.ts shipped with no tenant
+ * predicate at all: an exam could be built from another customer's question
+ * bank and printed to your staff. Nothing failed. Nothing warned. The comment
+ * two files away even asserted that file was filtered.
+ *
+ * So: if you are reaching for this, the query MUST contain `tenant_id = ...`.
+ * If it does not, you want runInTenant with the query builder, or runAsPlatform
+ * if it is genuinely platform-wide.
+ * ---------------------------------------------------------------------------
+ */
+const rawStorage = new AsyncLocalStorage<string>()
+
+export async function withHandWrittenTenantFilter<T>(
+  reason: string,
+  fn: () => T | Promise<T>
+): Promise<T> {
+  return rawStorage.run(reason, async () => await fn())
+}
+
+export function handWrittenFilterReason(): string | undefined {
+  return rawStorage.getStore()
+}
+
+/**
  * The current tenant, or a thrown error.
  *
  * Callers that write rows use this. It throws rather than returning null

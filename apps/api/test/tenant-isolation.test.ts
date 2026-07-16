@@ -8,6 +8,7 @@ import {
   seedPlans,
   seedTenant,
   TenantContextError,
+  withHandWrittenTenantFilter,
   type PrismaClient,
 } from '@bookends/db'
 
@@ -80,6 +81,58 @@ describe('which models are guarded', () => {
     for (const model of ['Plan', 'Tenant']) {
       expect(models.has(model), `${model} must NOT be tenant-scoped`).toBe(false)
     }
+  })
+})
+
+describe('raw SQL fails closed', () => {
+  /**
+   * The extension cannot read a raw statement, so it cannot know whether it
+   * filters. It used to let raw through silently, and question-selection.ts
+   * shipped with no tenant predicate — an exam could be built from another
+   * customer's question bank. These tests hold the door shut.
+   */
+  it('refuses a raw query inside a tenant scope unless the author signs for it', async () => {
+    await expect(
+      runInTenant(alpha, () => scoped.$queryRaw`SELECT id FROM departments`)
+    ).rejects.toThrow(TenantContextError)
+  })
+
+  it('names the three ways out, so the error is a fix and not a puzzle', async () => {
+    await expect(
+      runInTenant(alpha, () => scoped.$queryRaw`SELECT id FROM departments`)
+    ).rejects.toThrow(/withHandWrittenTenantFilter[\s\S]*runAsPlatform[\s\S]*query builder/)
+  })
+
+  it('allows a raw query whose author states it carries its own tenant_id', async () => {
+    const rows = await runInTenant(alpha, () =>
+      withHandWrittenTenantFilter(
+        'test: the predicate is right there in the statement',
+        () => scoped.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM departments WHERE tenant_id = ${alpha}::uuid AND code = 'ISOK'
+        `
+      )
+    )
+    expect(rows).toHaveLength(1)
+  })
+
+  it('allows raw under runAsPlatform, which is unscoped by definition', async () => {
+    const rows = await runAsPlatform('test: platform-wide raw read', () =>
+      scoped.$queryRaw<Array<{ id: string }>>`SELECT id FROM departments WHERE code = 'ISOK'`
+    )
+    expect(rows.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('does NOT verify the SQL — the signature is a claim a reviewer must check', async () => {
+    // Deliberate: this query is a lie. It says it filters and it does not, and
+    // the guard cannot tell. Asserted so nobody mistakes the wrapper for a
+    // parser and starts trusting it to catch what only review can.
+    const rows = await runInTenant(alpha, () =>
+      withHandWrittenTenantFilter(
+        'test: this reason is false, on purpose',
+        () => scoped.$queryRaw<Array<{ id: string }>>`SELECT id FROM departments WHERE code = 'ISOK'`
+      )
+    )
+    expect(rows.length).toBeGreaterThanOrEqual(2)
   })
 })
 

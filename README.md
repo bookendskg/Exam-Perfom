@@ -72,9 +72,41 @@ cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
 
 npm run dev:db            # terminal 1 — starts PostgreSQL, prints the DATABASE_URL
 npm run db:migrate        # terminal 2 — create the tables
-npm run db:seed           # outlets, departments, designations
+npm run db:seed           # plans, the anchor tenant, outlets, departments, designations
 npm run dev               # start the API on http://localhost:4000
 ```
+
+### Database roles
+
+The API does **not** connect as a superuser. Run this once per database:
+
+```bash
+psql -U postgres -d bookends \
+  -v app_pw="'...'" -v migrator_pw="'...'" -v dbname=bookends \
+  -f scripts/provision-roles.sql
+```
+
+It creates two roles and then verifies its own work — it will tell you if
+anything did not take, rather than reporting success and failing later:
+
+| Role | Does | Cannot |
+| --- | --- | --- |
+| `examhub_app` | serves requests: reads and writes rows | run DDL, own tables, read `pg_authid`, bypass RLS, `SET ROLE` to anything privileged |
+| `examhub_migrator` | owns the schema, runs migrations | serve requests (nothing points at it but `db:migrate`) |
+
+Then set both `DATABASE_URL` (app) and `MIGRATE_DATABASE_URL` (migrator) in
+`.env`. If `MIGRATE_DATABASE_URL` is unset, migrations fall back to
+`DATABASE_URL`, so a single-role database keeps working.
+
+Why bother: connecting as a superuser leaves application code as the only thing
+between a bug and every tenant's data. That is one layer, and it has been wrong
+before — `question-selection.ts` once built exams from raw SQL with no tenant
+filter at all. A superuser also silently ignores row-level security, so any
+future RLS work is decorative until this is in place.
+
+On a brand-new database, run the script **again** after the first migration:
+the first pass cannot revoke access to `_prisma_migrations` before Prisma has
+created it. The script detects this and says so.
 
 The database must be **UTF8**. Hindi and Gujarati content (§6) cannot be stored
 in a single-byte encoding, and the API refuses to boot against one. `dev:db`

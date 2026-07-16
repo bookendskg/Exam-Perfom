@@ -21,10 +21,10 @@
     "generate": "prisma generate",
     "validate": "prisma validate",
     "format": "prisma format",
-    "migrate:dev": "prisma migrate dev",
-    "migrate:deploy": "prisma migrate deploy",
+    "migrate:dev": "node scripts/with-migrator.mjs migrate dev",
+    "migrate:deploy": "node scripts/with-migrator.mjs migrate deploy",
     "studio": "prisma studio",
-    "seed": "tsx prisma/seed.ts",
+    "seed": "tsx --env-file-if-exists=../../.env prisma/seed.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {

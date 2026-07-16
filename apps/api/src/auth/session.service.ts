@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@bookends/db'
-import { runAsPlatform, runInTenant } from '@bookends/db'
+import { runAsPlatform, runInTenant, withHandWrittenTenantFilter } from '@bookends/db'
 import { isStaffRole, type Role } from '@bookends/core'
 import type { Config } from '../config/env.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
@@ -63,12 +63,16 @@ export class SessionService {
       // but an unqualified `FROM users` in a multi-tenant schema is exactly the
       // shape that becomes a leak the day someone copies it somewhere it
       // matters. Revisit once RLS lands and the database enforces this itself.
-      await tx.$queryRaw`
-        SELECT id FROM users
-         WHERE id = ${userId}::uuid
-           AND tenant_id = ${tenantId}::uuid
-           FOR UPDATE
-      `
+      await withHandWrittenTenantFilter(
+        'SELECT ... FROM users WHERE tenant_id = $tenantId FOR UPDATE',
+        () =>
+          tx.$queryRaw`
+            SELECT id FROM users
+             WHERE id = ${userId}::uuid
+               AND tenant_id = ${tenantId}::uuid
+               FOR UPDATE
+          `
+      )
 
       if (isStaffRole(role)) {
         await tx.userSession.updateMany({

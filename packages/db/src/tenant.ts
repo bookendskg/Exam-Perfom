@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client'
-import { currentScope, TenantContextError } from './tenant-context.js'
+import { currentScope, handWrittenFilterReason, TenantContextError } from './tenant-context.js'
 
 /**
  * Tenant isolation, enforced in one place (SaaS §2.4).
@@ -21,9 +21,23 @@ import { currentScope, TenantContextError } from './tenant-context.js'
  * symptom at all.
  * ---------------------------------------------------------------------------
  *
- * This is layer one. PostgreSQL RLS is layer two and is NOT yet in place, so
- * raw SQL ($queryRaw) is currently unguarded and must carry its own tenant
- * filter by hand — see employee-code.ts, exam-code.ts, question-selection.ts.
+ * ---------------------------------------------------------------------------
+ * Raw SQL fails CLOSED — see guardRawQuery below.
+ *
+ * An earlier version of this comment read: "raw SQL ($queryRaw) is currently
+ * unguarded and must carry its own tenant filter by hand — see employee-code.ts,
+ * exam-code.ts, question-selection.ts."
+ *
+ * Two of those three did. question-selection.ts never had a tenant predicate at
+ * all, and leaked one customer's question bank into another customer's exams.
+ * The comment asserting it was handled is a large part of why that survived
+ * review: it read as a checklist someone had already ticked.
+ *
+ * So the rule is no longer "remember to filter". Raw SQL is refused unless the
+ * author signs for it with withHandWrittenTenantFilter(), which puts the claim
+ * in the diff where a reviewer can check it against the SQL. Do not weaken this
+ * back into a comment.
+ * ---------------------------------------------------------------------------
  */
 
 /**
@@ -74,53 +88,106 @@ export function withTenantScope<T extends PrismaClient>(prisma: T): T {
   return prisma.$extends({
     name: 'tenantScope',
     query: {
-      $allModels: {
-        async $allOperations({ model, operation, args, query }) {
-          if (!TENANT_SCOPED_MODELS.has(model)) return query(args)
+      /**
+       * CLIENT-LEVEL, not nested under $allModels. That one word is the
+       * difference between seeing raw SQL and not:
+       *
+       *   $allModels hook sees:   ["Plan.findMany"]
+       *   client-level hook sees: ["Plan.findMany", "<raw>.$queryRawUnsafe"]
+       *
+       * Nested under $allModels, $queryRaw is invisible — a raw query against a
+       * tenant table sailed through completely unguarded. That is not
+       * hypothetical: question-selection.ts shipped with no tenant predicate and
+       * leaked one customer's question bank into another's exams.
+       *
+       * Here, raw SQL fails CLOSED. It must be acknowledged by
+       * withHandWrittenTenantFilter(), which is a reviewable claim rather than
+       * silence.
+       */
+      async $allOperations({ model, operation, args, query }) {
+        // Raw SQL: no model, and nothing here can inspect the statement.
+        if (!model) return guardRawQuery(operation, args, query)
 
-          const scope = currentScope()
+        if (!TENANT_SCOPED_MODELS.has(model)) return query(args)
 
-          // Fail closed. An unscoped query against a tenant table is not a
-          // thing to allow "just this once" — if it were legitimate it would
-          // have said runAsPlatform().
-          if (!scope) {
-            throw new TenantContextError(
-              `${model}.${operation} ran with no tenant context. ` +
-                `Wrap it in runInTenant(), or runAsPlatform("<reason>") if it is genuinely platform work.`
-            )
-          }
+        const scope = currentScope()
 
-          if (scope.kind === 'platform') return query(args)
-
-          const { tenantId } = scope
-          const typed = (args ?? {}) as Record<string, unknown>
-
-          if (FILTERED_OPERATIONS.has(operation)) {
-            typed['where'] = { ...((typed['where'] as object) ?? {}), tenantId }
-            return query(typed)
-          }
-
-          if (CREATE_OPERATIONS.has(operation)) {
-            assertWriteTenant(model, operation, typed['data'], tenantId)
-            return query(typed)
-          }
-
-          if (operation === 'upsert') {
-            typed['where'] = { ...((typed['where'] as object) ?? {}), tenantId }
-            assertWriteTenant(model, operation, typed['create'], tenantId)
-            return query(typed)
-          }
-
-          // An operation we have not classified. Refuse rather than wave it
-          // through: a new Prisma verb should fail loudly here once, not leak
-          // quietly forever.
+        // Fail closed. An unscoped query against a tenant table is not a thing
+        // to allow "just this once" — if it were legitimate it would have said
+        // runAsPlatform().
+        if (!scope) {
           throw new TenantContextError(
-            `${model}.${operation} is not handled by the tenant extension; refusing to run it unscoped.`
+            `${model}.${operation} ran with no tenant context. ` +
+              `Wrap it in runInTenant(), or runAsPlatform("<reason>") if it is genuinely platform work.`
           )
-        },
+        }
+
+        if (scope.kind === 'platform') return query(args)
+
+        const { tenantId } = scope
+        const typed = (args ?? {}) as Record<string, unknown>
+
+        if (FILTERED_OPERATIONS.has(operation)) {
+          typed['where'] = { ...((typed['where'] as object) ?? {}), tenantId }
+          return query(typed)
+        }
+
+        if (CREATE_OPERATIONS.has(operation)) {
+          assertWriteTenant(model, operation, typed['data'], tenantId)
+          return query(typed)
+        }
+
+        if (operation === 'upsert') {
+          typed['where'] = { ...((typed['where'] as object) ?? {}), tenantId }
+          assertWriteTenant(model, operation, typed['create'], tenantId)
+          return query(typed)
+        }
+
+        // An operation we have not classified. Refuse rather than wave it
+        // through: a new Prisma verb should fail loudly here once, not leak
+        // quietly forever.
+        throw new TenantContextError(
+          `${model}.${operation} is not handled by the tenant extension; refusing to run it unscoped.`
+        )
       },
     },
   }) as unknown as T
+}
+
+/**
+ * Raw SQL, which this guard is structurally unable to inspect.
+ *
+ * It cannot parse the statement, so it cannot know whether the query filters by
+ * tenant. The only honest options are to refuse it, or to demand that the author
+ * says out loud that they filtered. It does both: refuse by default, accept a
+ * signed statement via withHandWrittenTenantFilter().
+ *
+ * This is the guard that did not exist when question-selection.ts leaked one
+ * tenant's question bank into another tenant's exams.
+ */
+function guardRawQuery(
+  operation: string,
+  args: unknown,
+  query: (args: unknown) => Promise<unknown>
+): Promise<unknown> {
+  const scope = currentScope()
+
+  // Platform work is unscoped by definition, and raw is no different.
+  if (scope?.kind === 'platform') return query(args)
+
+  // The author has stated the query carries its own tenant_id predicate.
+  if (handWrittenFilterReason()) return query(args)
+
+  // Outside any scope at all — boot checks, migrations, the seed, test
+  // fixtures. Those legitimately use the RAW client, which never reaches this
+  // extension; anything arriving here without a scope came through the scoped
+  // client and is a mistake worth surfacing.
+  throw new TenantContextError(
+    `Raw SQL (${operation}) cannot be tenant-guarded automatically — this extension cannot read your statement.\n` +
+      `If the query filters by tenant_id itself, wrap it in withHandWrittenTenantFilter("<why>", ...).\n` +
+      `If it is genuinely platform-wide, use runAsPlatform("<why>", ...).\n` +
+      `If neither is true, it is a cross-tenant leak: use the query builder instead.`
+  )
 }
 
 /**

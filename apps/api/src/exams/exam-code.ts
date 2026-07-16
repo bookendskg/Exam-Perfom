@@ -1,4 +1,5 @@
 import type { Prisma } from '@bookends/db'
+import { withHandWrittenTenantFilter } from '@bookends/db'
 
 /**
  * §4.1 exam codes: EX-2026-07-001 — year, month, then a sequence within that
@@ -49,13 +50,17 @@ export async function claimExamCode(
   // the column in both the INSERT and the ON CONFLICT target, every tenant
   // would share one sequence, so Bookends scheduling an exam would advance
   // Hotel Sunrise's numbering and leak our exam volume through the gaps.
-  const rows = await tx.$queryRaw<Array<{ last_seq: number }>>`
-    INSERT INTO exam_code_counters (tenant_id, period, last_seq)
-         VALUES (${tenantId}::uuid, ${period}, 1)
-    ON CONFLICT (tenant_id, period)
-      DO UPDATE SET last_seq = exam_code_counters.last_seq + 1
-      RETURNING last_seq
-  `
+  const rows = await withHandWrittenTenantFilter(
+    'INSERT ... exam_code_counters keyed (tenant_id, period), tenant_id supplied',
+    () =>
+      tx.$queryRaw<Array<{ last_seq: number }>>`
+        INSERT INTO exam_code_counters (tenant_id, period, last_seq)
+             VALUES (${tenantId}::uuid, ${period}, 1)
+        ON CONFLICT (tenant_id, period)
+          DO UPDATE SET last_seq = exam_code_counters.last_seq + 1
+          RETURNING last_seq
+      `
+  )
 
   const seq = rows[0]?.last_seq
   if (seq === undefined) throw new Error(`Failed to claim an exam code for ${period}`)
