@@ -365,6 +365,7 @@ model Tenant {
   users                User[]
   sessions             UserSession[]
   examCodeCounters     ExamCodeCounter[]
+  certificateCounters  CertificateCounter[]
   employees            Employee[]
   employeeSkills       EmployeeSkill[]
   employeeTimeline     EmployeeTimeline[]
@@ -542,6 +543,28 @@ model ExamCodeCounter {
 
   @@id([tenantId, period])
   @@map("exam_code_counters")
+}
+
+/// Per-year counter backing certificate numbers (CERT-2026-0001).
+///
+/// The same shape and the same reasoning as ExamCodeCounter, deliberately: a
+/// certificate number is a claim someone makes to an employer, so two people
+/// holding CERT-2026-0007 is unfixable after the fact. COUNT(*)+1 would hand
+/// the same number to two concurrent issuers, and revoking a certificate must
+/// not free its number for reuse.
+///
+/// Keyed by year, not month: §4.1 numbers certificates annually, and a monthly
+/// reset would make CERT-2026-0001 ambiguous twelve times over.
+model CertificateCounter {
+  tenantId String @map("tenant_id") @db.Uuid
+  /// 'YYYY'
+  year    Int
+  lastSeq Int @default(0) @map("last_seq")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, year])
+  @@map("certificate_counters")
 }
 
 /// Authentication sessions, per §7.5.

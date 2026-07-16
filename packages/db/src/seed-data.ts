@@ -30,6 +30,11 @@ export const SEED_PLANS = [
     whatsappNotifications: false,
     aiInsights: false,
     customBranding: false,
+    // §4.1: Starter reports are "Basic (in-app)" — readable in the product,
+    // not downloadable. These were absent and defaulted to false, which was
+    // accidentally correct here and wrong on the paid tiers below.
+    pdfExport: false,
+    excelExport: false,
     dataRetentionMonths: 6,
     sortOrder: 1,
   },
@@ -49,6 +54,11 @@ export const SEED_PLANS = [
     whatsappNotifications: true,
     aiInsights: false,
     customBranding: true,
+    // §4.1: "PDF + Excel export" from Professional up. These were missing, so
+    // the column default (false) applied and export was locked on every tier
+    // including Enterprise — a paid feature nobody could reach.
+    pdfExport: true,
+    excelExport: true,
     dataRetentionMonths: 24,
     sortOrder: 2,
   },
@@ -67,6 +77,8 @@ export const SEED_PLANS = [
     whatsappNotifications: true,
     aiInsights: true,
     customBranding: true,
+    pdfExport: true,
+    excelExport: true,
     dataRetentionMonths: 999,
     sortOrder: 3,
   },

@@ -46,6 +46,9 @@ export interface TenantPlan {
   /** Which QuestionType values may be created. */
   questionTypes: readonly string[]
   autoScheduling: boolean
+  /** §4.1: "PDF + Excel export" from Professional up. Read by Module 11. */
+  pdfExport: boolean
+  excelExport: boolean
 }
 
 /** The countable limits. Storage is absent on purpose — see below. */
@@ -93,6 +96,8 @@ export class PlanService {
             maxExamsPerMonth: true,
             questionTypes: true,
             autoScheduling: true,
+            pdfExport: true,
+            excelExport: true,
           },
         },
       },
@@ -117,6 +122,8 @@ export class PlanService {
       maxExamsPerMonth: tenant.plan.maxExamsPerMonth,
       questionTypes: tenant.plan.questionTypes,
       autoScheduling: tenant.plan.autoScheduling,
+      pdfExport: tenant.plan.pdfExport,
+      excelExport: tenant.plan.excelExport,
     }
   }
 

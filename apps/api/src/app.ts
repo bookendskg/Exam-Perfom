@@ -27,6 +27,9 @@ import { buildExamRouters } from './exams/exam.routes.js'
 import { buildSchedulingRouter } from './scheduling/scheduling.routes.js'
 import { buildGradingRouter } from './grading/grading.routes.js'
 import { buildAnalyticsRouter } from './analytics/analytics.routes.js'
+import { buildTrainingRouter } from './training/training.routes.js'
+import { buildRewardsRouters } from './rewards/rewards.routes.js'
+import { buildReportsRouter } from './reports/reports.routes.js'
 
 /**
  * Everything the app needs, passed in rather than imported. Tests inject a
@@ -152,6 +155,12 @@ export function buildApp(rawDeps: Deps): Application {
   app.use('/api/v1/exam-schedule-config', buildSchedulingRouter(deps))
   app.use('/api/v1/grading', buildGradingRouter(deps))
   app.use('/api/v1/analytics', buildAnalyticsRouter(deps))
+  app.use('/api/v1/training', buildTrainingRouter(deps))
+
+  const { rewardRouter, certificateRouter } = buildRewardsRouters(deps)
+  app.use('/api/v1/rewards', rewardRouter)
+  app.use('/api/v1/certificates', certificateRouter)
+  app.use('/api/v1/reports', buildReportsRouter(deps))
 
   app.use(notFoundHandler)
   app.use(errorHandler(logger))
