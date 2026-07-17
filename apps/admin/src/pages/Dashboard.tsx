@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { api } from '../lib/api.js'
+import { useAuth } from '../lib/auth.js'
 import { useApi, query } from '../lib/useApi.js'
-import { Card, Empty, ErrorNote, Select, Spinner, Table } from '../components/ui.js'
+import { Button, Card, Empty, ErrorNote, Select, Spinner, Table } from '../components/ui.js'
 
 interface DashboardData {
   period: { year: number; month: number }
@@ -33,7 +35,11 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
+/** §3.2: only these two hold `exam:override_schedule`, which the rebuild needs. */
+const CAN_REBUILD = new Set(['super_admin', 'admin'])
+
 export function Dashboard() {
+  const { me } = useAuth()
   const now = new Date()
   const [year, setYear] = useState(now.getUTCFullYear())
   const [month, setMonth] = useState(now.getUTCMonth() + 1)
@@ -42,6 +48,36 @@ export function Dashboard() {
   const dash = useApi<DashboardData>(`/analytics/dashboard${period}`, [year, month])
   const weak = useApi<WeakArea[]>(`/analytics/weak-areas${period}`, [year, month])
   const board = useApi<LeaderboardRow[]>(`/analytics/leaderboard${period}&limit=5`, [year, month])
+
+  /**
+   * Recompute this month's performance snapshots.
+   *
+   * These figures do not update themselves — grading a paper writes the
+   * assignment, but the dashboard/reports read a monthly rollup that only this
+   * rebuild (or a not-yet-wired cron) produces. Without a button, a freshly
+   * graded exam shows "0 assessed" and an admin has no way to refresh it. Admins
+   * only: it rewrites everyone's numbers.
+   */
+  const canRebuild = CAN_REBUILD.has(me?.role ?? '')
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildNote, setRebuildNote] = useState<string | null>(null)
+  const [rebuildError, setRebuildError] = useState<unknown>(null)
+
+  const rebuild = async () => {
+    setRebuilding(true)
+    setRebuildNote(null)
+    setRebuildError(null)
+    try {
+      const r = await api.post<{ employees: number }>('/analytics/snapshots/rebuild', { year, month })
+      setRebuildNote(`Recomputed ${r.employees} ${r.employees === 1 ? 'employee' : 'employees'} for ${MONTHS[month - 1]} ${year}.`)
+      // Pull the refreshed numbers into the three panels.
+      await Promise.all([dash.refetch(), weak.refetch(), board.refetch()])
+    } catch (err) {
+      setRebuildError(err)
+    } finally {
+      setRebuilding(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -53,7 +89,7 @@ export function Dashboard() {
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="w-36">
             {MONTHS.map((name, i) => (
               <option key={name} value={i + 1}>
@@ -68,8 +104,26 @@ export function Dashboard() {
               </option>
             ))}
           </Select>
+          {canRebuild && (
+            <Button variant="secondary" loading={rebuilding} onClick={() => void rebuild()}>
+              Refresh figures
+            </Button>
+          )}
         </div>
       </header>
+
+      {/* Why a manual refresh exists at all — said once, where the button is. */}
+      {canRebuild && (
+        <p className="-mt-2 text-xs text-ink-muted">
+          Newly graded exams appear here after a refresh.
+        </p>
+      )}
+      {rebuildNote && (
+        <div className="rounded-md border border-success/40 bg-success/5 px-4 py-2 text-sm text-ink">
+          {rebuildNote}
+        </div>
+      )}
+      <ErrorNote error={rebuildError} />
 
       <ErrorNote error={dash.error} />
 

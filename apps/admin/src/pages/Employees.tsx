@@ -39,6 +39,8 @@ interface Org {
   id: string
   name: string
   code: string
+  /** Present on designations: which department the designation belongs to. */
+  department?: { id: string; name: string; code: string }
 }
 
 const STATUS_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -329,7 +331,16 @@ function CreateEmployee({
             </Select>
           </Field>
           <Field label="Department" required>
-            <Select value={form.departmentId} onChange={set('departmentId')} required>
+            <Select
+              value={form.departmentId}
+              // Changing department clears the designation: the API rejects a
+              // designation that belongs to another department, and a stale
+              // pick left from the previous choice is exactly that mismatch.
+              onChange={(e) =>
+                setForm((f) => ({ ...f, departmentId: e.target.value, designationId: '' }))
+              }
+              required
+            >
               <option value="">Choose…</option>
               {(departments.data ?? []).map((d) => (
                 <option key={d.id} value={d.id}>
@@ -338,14 +349,22 @@ function CreateEmployee({
               ))}
             </Select>
           </Field>
-          <Field label="Designation" required>
-            <Select value={form.designationId} onChange={set('designationId')} required>
+          <Field
+            label="Designation"
+            required
+            hint={!form.departmentId ? 'Choose a department first' : undefined}
+          >
+            <Select value={form.designationId} onChange={set('designationId')} required disabled={!form.departmentId}>
               <option value="">Choose…</option>
-              {(designations.data ?? []).map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
+              {/* Only this department's designations — the API enforces the
+                  match, so offering the others just invites a 400. */}
+              {(designations.data ?? [])
+                .filter((d) => d.department?.id === form.departmentId)
+                .map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
             </Select>
           </Field>
           <Field label="Language" hint="§6: the language their app appears in">
