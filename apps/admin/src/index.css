@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * §19.2's defaults. Set as channels, not hex, so Tailwind's <alpha-value> can
+ * compose them — `bg-primary/10` needs the raw RGB.
+ *
+ * §5.2 lets a tenant override primary/secondary/accent. The app rewrites these
+ * three at runtime from the tenant's branding, so a customer's colours arrive
+ * without a rebuild.
+ */
+:root {
+  --color-primary: 30 58 95; /* #1E3A5F */
+  --color-secondary: 245 158 11; /* #F59E0B */
+  --color-accent: 99 102 241; /* #6366F1 */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink antialiased;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+/**
+ * §6 ships Hindi (Devanagari) and Gujarati alongside English, and the default
+ * stack has neither. Without a script-aware fallback the browser substitutes
+ * whatever it has and the text renders at the wrong weight and baseline — it is
+ * legible, which is why nobody notices it looks wrong.
+ */
+:lang(hi) {
+  font-family: 'Noto Sans Devanagari', Inter, sans-serif;
+}
+
+:lang(gu) {
+  font-family: 'Noto Sans Gujarati', Inter, sans-serif;
+}
+
+/* A visible focus ring everywhere. Restaurant managers use keyboards. */
+:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-2;
+}

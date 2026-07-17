@@ -26,7 +26,9 @@
     "db:seed": "npm run seed -w @bookends/db",
     "db:studio": "npm run studio -w @bookends/db",
     "dev": "npm run dev -w @bookends/api",
-    "dev:db": "node scripts/dev-db.mjs"
+    "dev:db": "node scripts/dev-db.mjs",
+    "dev:admin": "npm run dev -w @bookends/admin",
+    "build:admin": "npm run build -w @bookends/admin"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    /**
+     * The base targets Node: `module: NodeNext` and no DOM lib. A browser app
+     * needs neither, so these four override it — everything else (strict,
+     * noUncheckedIndexedAccess, verbatimModuleSyntax) is inherited on purpose.
+     * The API's strictness is not a Node thing; it is a house rule.
+     */
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+
+    /**
+     * Vite compiles; tsc only checks. Without this, `tsc -b` writes .js next to
+     * every .tsx and the two build systems fight over the same directory.
+     * composite requires an outDir even when nothing is emitted, hence tsbuild.
+     */
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "declaration": false,
+    "declarationMap": false,
+    "composite": false,
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}
