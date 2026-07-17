@@ -112,10 +112,17 @@ export class PostgresSessionStore implements SessionStore {
     )
   }
 
-  async deleteAllForUser(userId: string): Promise<void> {
+  async deleteAllForUser(userId: string, exceptSessionId?: string): Promise<void> {
     await runAsPlatform(SCOPE_REASON, () =>
       this.prisma.userSession.updateMany({
-        where: { userId, revokedAt: null },
+        where: {
+          userId,
+          revokedAt: null,
+          // There is no cache here to evict — this is the store, so "delete"
+          // means revoke, and revoking the caller's brand-new session would log
+          // them straight back out.
+          ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}),
+        },
         data: { revokedAt: new Date(), revokedReason: 'admin_revoke' },
       })
     )

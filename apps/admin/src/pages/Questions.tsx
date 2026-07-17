@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, type Paged } from '../lib/api.js'
+import { useAuth } from '../lib/auth.js'
 import { query, useApi } from '../lib/useApi.js'
 import {
   Badge,
@@ -50,7 +51,11 @@ const STATUS_TONE = {
   archived: 'neutral',
 } as const
 
+/** §3.2: only these two hold `question:approve`. Everyone else writes and submits. */
+const CAN_APPROVE = new Set(['super_admin', 'admin'])
+
 export function Questions() {
+  const { me } = useAuth()
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
@@ -64,7 +69,9 @@ export function Questions() {
     [page, search, status, type, missing]
   )
 
-  const act = async (id: string, action: 'approve' | 'reject') => {
+  const canApprove = CAN_APPROVE.has(me?.role ?? '')
+
+  const act = async (id: string, action: 'submit' | 'approve' | 'reject') => {
     setError(null)
     try {
       await api.post(
@@ -186,14 +193,30 @@ export function Questions() {
                     <Badge tone={STATUS_TONE[q.status]}>{q.status.replace(/_/g, ' ')}</Badge>
                   </td>
                   <td className="px-4 py-2 text-right">
-                    {q.status === 'pending_review' && (
-                      <div className="flex justify-end gap-2">
-                        <Button variant="secondary" onClick={() => void act(q.id, 'reject')}>
-                          Reject
-                        </Button>
-                        <Button onClick={() => void act(q.id, 'approve')}>Approve</Button>
-                      </div>
+                    {/* §10.2 is draft → pending_review → approved, and only
+                        approved questions reach an exam. Without this button a
+                        question created here stays draft forever and the exam
+                        builder has nothing to draw from — the whole feature is
+                        unreachable, with nothing on screen to say why.
+                        Submitting is `question:update`, so anyone who can write
+                        a question can move their own along. */}
+                    {q.status === 'draft' && (
+                      <Button variant="secondary" onClick={() => void act(q.id, 'submit')}>
+                        Submit for review
+                      </Button>
                     )}
+                    {q.status === 'pending_review' &&
+                      (canApprove ? (
+                        <div className="flex justify-end gap-2">
+                          <Button variant="secondary" onClick={() => void act(q.id, 'reject')}>
+                            Reject
+                          </Button>
+                          <Button onClick={() => void act(q.id, 'approve')}>Approve</Button>
+                        </div>
+                      ) : (
+                        // A trainer sees where it is, not buttons that 403.
+                        <span className="text-xs text-ink-muted">Awaiting an admin</span>
+                      ))}
                   </td>
                 </tr>
               ))}

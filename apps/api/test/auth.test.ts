@@ -163,6 +163,49 @@ describe('§7.5 session policy', () => {
     expect(ok.status).toBe(200)
   })
 
+  it('issues a staff session that actually works on the Postgres store', async () => {
+    /**
+     * The store above is `memory`, where deleting a user's sessions only drops
+     * map entries and the login re-adds the new one straight after. Postgres is
+     * the default everywhere else and the only store production permits, and
+     * there "delete" means revoke — so the supersede step revoked the session
+     * the same login had just created, and every staff member got a token that
+     * 401'd on first use. Admins never saw it: only staff supersede.
+     *
+     * The sibling test above asserts this exact thing and passed throughout,
+     * because on memory it cannot fail. Hence a real store here.
+     */
+    app = buildTestApp({ SESSION_STORE: 'postgres' }).app
+    const { phone, password } = await makeUser({ role: 'staff' })
+
+    const res = await login(phone, password)
+    expect(res.status).toBe(200)
+
+    const me = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${res.body.data.accessToken}`)
+    expect(me.status).toBe(200)
+  })
+
+  it('still supersedes the old staff session on the Postgres store', async () => {
+    // The other half: sparing the new session must not spare the old ones.
+    app = buildTestApp({ SESSION_STORE: 'postgres' }).app
+    const { phone, password } = await makeUser({ role: 'staff' })
+
+    const first = await login(phone, password)
+    const second = await login(phone, password)
+
+    const dead = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${first.body.data.accessToken}`)
+    expect(dead.status).toBe(401)
+
+    const live = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${second.body.data.accessToken}`)
+    expect(live.status).toBe(200)
+  })
+
   it('lets an admin hold two sessions at once', async () => {
     const { phone, password } = await makeUser({ role: 'admin' })
 

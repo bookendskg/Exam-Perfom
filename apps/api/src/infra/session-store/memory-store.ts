@@ -56,9 +56,9 @@ export class MemorySessionStore implements SessionStore {
     this.entries.delete(sessionId)
   }
 
-  async deleteAllForUser(userId: string): Promise<void> {
+  async deleteAllForUser(userId: string, exceptSessionId?: string): Promise<void> {
     for (const [id, entry] of this.entries) {
-      if (entry.principal.userId === userId) this.entries.delete(id)
+      if (entry.principal.userId === userId && id !== exceptSessionId) this.entries.delete(id)
     }
   }
 

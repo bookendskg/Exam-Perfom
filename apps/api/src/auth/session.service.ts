@@ -96,8 +96,15 @@ export class SessionService {
 
     // Staff superseding above only revoked rows; drop the store entries too so
     // the old access token stops working immediately rather than at its expiry.
+    //
+    // Excluding the session just created is load-bearing, not defensive. The
+    // Postgres store — the default, and the only one allowed in production —
+    // has no cache to evict, so this call revokes in the database. Unqualified,
+    // it revoked the row created above and every staff login returned a token
+    // that 401'd on its first use. The memory store cannot reproduce that, and
+    // the suite defaults to memory, so nothing caught it.
     if (isStaffRole(role)) {
-      await this.store.deleteAllForUser(userId)
+      await this.store.deleteAllForUser(userId, session.id)
     }
 
     const principal = await resolvePrincipal(this.prisma, userId, session.id)

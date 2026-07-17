@@ -202,7 +202,12 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   })
   const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
-  const [shortfalls, setShortfalls] = useState<Array<{ type: string; wanted: number; found: number }>>([])
+  // `requested`, not `wanted` — the API's ShortfallReport names it that, and the
+  // difference rendered as "wanted undefined" in the one message meant to stop
+  // an admin publishing an exam shorter than they asked for.
+  const [shortfalls, setShortfalls] = useState<
+    Array<{ type: string; difficulty?: string; requested: number; found: number }>
+  >([])
 
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
@@ -214,10 +219,11 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     setShortfalls([])
 
     try {
-      const result = await api.post<{
-        exam: Exam
-        shortfalls?: Array<{ type: string; wanted: number; found: number }>
-      }>('/exams', {
+      // The API spreads shortfalls alongside the exam's own fields rather than
+      // nesting it under `exam`, so this is Exam & { shortfalls }.
+      const result = await api.post<
+        Exam & { shortfalls?: Array<{ type: string; difficulty?: string; requested: number; found: number }> }
+      >('/exams', {
         ...(form.templateId ? { templateId: form.templateId } : {}),
         nameEn: form.nameEn,
         scheduledDate: form.scheduledDate,
@@ -229,7 +235,18 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
         passingPercentage: Number(form.passingPercentage),
         // §11.2's auto-selection: ask for N approved MCQs matching the exam's
         // targeting, and the API picks them at random.
-        questionSelection: { mcq: { distribution: [{ count: Number(form.mcqCount) }] } },
+        //
+        // `total` is not redundant with the distribution's count — the API
+        // cross-checks the parts against the stated whole, and omitting it
+        // arrives as NaN rather than as missing. totalMarks is deliberately
+        // absent: the selected questions' own marks are the exam's total and
+        // the API sums them, which is the number §11.3 validates against.
+        questionSelection: {
+          mcq: {
+            total: Number(form.mcqCount),
+            distribution: [{ count: Number(form.mcqCount) }],
+          },
+        },
       })
 
       /**
@@ -261,7 +278,8 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
           <ul className="rounded-md border border-warning/40 bg-warning/5 p-4 text-sm">
             {shortfalls.map((s, i) => (
               <li key={i}>
-                {s.type}: wanted {s.wanted}, found {s.found}
+                {s.type}
+                {s.difficulty ? ` (${s.difficulty})` : ''}: asked for {s.requested}, found {s.found}
               </li>
             ))}
           </ul>

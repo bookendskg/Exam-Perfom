@@ -46,7 +46,16 @@ export interface SessionStore {
    */
   touch(sessionId: string, ttlSeconds: number): Promise<Principal | null>
   delete(sessionId: string): Promise<void>
-  deleteAllForUser(userId: string): Promise<void>
+  /**
+   * Drops every session for a user, optionally sparing one.
+   *
+   * `exceptSessionId` is not a convenience. The Postgres store IS the database,
+   * so this call revokes rather than merely evicts — and a caller that has just
+   * issued a session and wants the *previous* ones gone would otherwise kill the
+   * new one. The memory store cannot show that difference, which is exactly why
+   * the exclusion has to be stated rather than assumed.
+   */
+  deleteAllForUser(userId: string, exceptSessionId?: string): Promise<void>
   /** Drops cached principals so the next request re-resolves scope from the DB. */
   invalidatePrincipal(userId: string): Promise<void>
 }

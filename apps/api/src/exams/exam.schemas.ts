@@ -110,16 +110,29 @@ export const createExamSchema = z
 
     // Without a template there is nothing to inherit from, so the parameters
     // §11.1 step 3 calls for have to be present.
-    if (!v.templateId) {
-      for (const field of ['totalMarks', 'durationMinutes'] as const) {
-        if (v[field] === undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [field],
-            message: `Required when creating an exam without a template`,
-          })
-        }
-      }
+    if (!v.templateId && v.durationMinutes === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['durationMinutes'],
+        message: `Required when creating an exam without a template`,
+      })
+    }
+
+    /**
+     * totalMarks is only required when nothing can supply it.
+     *
+     * With a template it is inherited; with questions it is their sum, which is
+     * what §11.3 checks the declared total against anyway — so asking for it up
+     * front is asking the admin to predict a number the API already knows, and
+     * a wrong guess is a draft that will not publish. Only a bare exam with no
+     * template and no questions has no other source.
+     */
+    if (!v.templateId && !v.questionSelection && !v.questionIds?.length && v.totalMarks === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['totalMarks'],
+        message: `Required when creating an exam without a template or any questions`,
+      })
     }
   })
 
@@ -137,8 +150,20 @@ export const updateExamSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'No fields to update' })
 
+/**
+ * §11.1 step 6: naming employees is the exception, not the rule.
+ *
+ * Omitting them means "everyone this exam targets", which is what assigning an
+ * exam scoped to an outlet and department normally means — and what
+ * `assignEmployees` already does when handed no ids. Requiring the list forced
+ * the caller to compute a set the API derives better: it applies §11.3's active
+ * filter itself, so a named list can silently skip a departed employee where
+ * the derived one simply never includes them.
+ *
+ * An empty array stays rejected — it reads as a mistake, not as "everyone".
+ */
 export const assignSchema = z.object({
-  employeeIds: z.array(z.string().uuid()).min(1, 'Provide at least one employee').max(500),
+  employeeIds: z.array(z.string().uuid()).min(1, 'Provide at least one employee').max(500).optional(),
 })
 
 export const listExamsQuerySchema = z.object({
