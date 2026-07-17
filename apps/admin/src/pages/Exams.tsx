@@ -199,6 +199,11 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     durationMinutes: '60',
     passingPercentage: '40',
     mcqCount: '10',
+    // Whether staff see their score once grading completes. This is the ONLY
+    // moment it can be chosen: §11.1 freezes a scheduled exam, and there is no
+    // release-results action afterwards — so left off here, results are hidden
+    // forever and every staff member's result screen 409s. Default on.
+    showResultImmediately: true,
   })
   const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
@@ -247,6 +252,9 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
             distribution: [{ count: Number(form.mcqCount) }],
           },
         },
+        // Set at creation because it cannot be set later — a scheduled exam is
+        // frozen and there is no separate release step.
+        showResultImmediately: form.showResultImmediately,
       })
 
       /**
@@ -373,6 +381,24 @@ function CreateExam({ onClose, onCreated }: { onClose: () => void; onCreated: ()
             <Input type="number" min="1" max="100" value={form.mcqCount} onChange={set('mcqCount')} />
           </Field>
         </div>
+
+        {/* Decide it here or never: a scheduled exam is frozen (§11.1) and there
+            is no release-results step, so an exam created with this off shows
+            staff nothing after grading — the result screen just errors. */}
+        <label className="flex items-start gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.showResultImmediately}
+            onChange={(e) => setForm((f) => ({ ...f, showResultImmediately: e.target.checked }))}
+          />
+          <span>
+            Show each staff member their score once grading finishes
+            <span className="block text-xs text-ink-muted">
+              This cannot be changed after the exam is scheduled. Off means results stay hidden.
+            </span>
+          </span>
+        </label>
 
         <Button type="submit" loading={busy}>
           Create draft
