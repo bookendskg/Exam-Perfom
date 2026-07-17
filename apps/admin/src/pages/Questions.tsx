@@ -248,8 +248,10 @@ function CreateQuestion({ onClose, onCreated }: { onClose: () => void; onCreated
         type,
         difficulty: form.difficulty,
         departmentId: form.departmentId,
-        ...(form.topicId ? { topicId: form.topicId } : {}),
-        ...(form.sourceDocumentId ? { sourceDocumentId: form.sourceDocumentId } : {}),
+        // Both REQUIRED by §10.3 — the API rejects a question with no topic or
+        // no source, so neither is conditional here.
+        topicId: form.topicId,
+        sourceDocumentId: form.sourceDocumentId,
         questionTextEn: form.questionTextEn,
         // Empty strings would fail the API's validation; §6's trilingual columns
         // want a real absence, which is what omitting them means.
@@ -258,10 +260,13 @@ function CreateQuestion({ onClose, onCreated }: { onClose: () => void; onCreated
         marks: Number(form.marks),
         ...(type === 'mcq'
           ? {
+              // camelCase — textEn/isCorrect, NOT the snake_case the stored
+              // JSONB column uses. The API's zod schema is the contract here,
+              // and it maps to the column itself.
               options: options.map((text, i) => ({
                 id: String.fromCharCode(65 + i),
-                text_en: text,
-                is_correct: String.fromCharCode(65 + i) === correct,
+                textEn: text,
+                isCorrect: String.fromCharCode(65 + i) === correct,
               })),
             }
           : {}),
@@ -274,9 +279,34 @@ function CreateQuestion({ onClose, onCreated }: { onClose: () => void; onCreated
     }
   }
 
+  /**
+   * §10.3 makes BOTH the topic and the source document mandatory, so with an
+   * empty library this form cannot be submitted at all. Say why and where to
+   * go — two empty required dropdowns are a dead end nobody can debug from
+   * the outside.
+   */
+  const needsDocument = !documents.loading && documents.data?.data.length === 0
+  const needsTopic = !topics.loading && topics.data?.data.length === 0
+
   return (
     <Card title="Add question" action={<Button variant="ghost" onClick={onClose}>Cancel</Button>}>
       <form onSubmit={submit} className="space-y-4">
+        {(needsDocument || needsTopic) && (
+          <div className="rounded-md border border-info/40 bg-info/5 px-4 py-3 text-sm">
+            <p className="font-medium text-ink">
+              Add {needsDocument && needsTopic ? 'a source document and a topic' : needsDocument ? 'a source document' : 'a topic'} first
+            </p>
+            <p className="mt-1 text-ink-muted">
+              §10.3 requires every question to cite a source and belong to a topic. Add{' '}
+              {needsDocument && needsTopic ? 'them' : 'one'} under{' '}
+              <a className="text-primary underline" href="/library">
+                Library
+              </a>
+              , then come back.
+            </p>
+          </div>
+        )}
+
         {/* §4.3's questionTypes gate lands here: a Starter tenant choosing
             "theory" gets PLAN_FEATURE_LOCKED, and ErrorNote renders the upgrade
             message rather than a bare failure. */}
@@ -317,9 +347,9 @@ function CreateQuestion({ onClose, onCreated }: { onClose: () => void; onCreated
               ))}
             </Select>
           </Field>
-          <Field label="Topic">
-            <Select value={form.topicId} onChange={set('topicId')}>
-              <option value="">None</option>
+          <Field label="Topic" required hint="§10.3: what weak-area reports group by">
+            <Select value={form.topicId} onChange={set('topicId')} required>
+              <option value="">Choose…</option>
               {(topics.data?.data ?? []).map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.nameEn}

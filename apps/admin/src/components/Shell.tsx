@@ -17,6 +17,9 @@ const NAV: Array<{ to: string; label: string; area: NavArea }> = [
   { to: '/', label: 'Dashboard', area: 'dashboard' },
   { to: '/employees', label: 'Employees', area: 'employees' },
   { to: '/questions', label: 'Question Bank', area: 'questions' },
+  // Directly under Questions: nobody sets out to manage source documents, they
+  // set out to add a question and find §10.3 requires one first.
+  { to: '/library', label: 'Library', area: 'questions' },
   { to: '/exams', label: 'Exams', area: 'exams' },
   { to: '/grading', label: 'Grading', area: 'grading' },
   { to: '/training', label: 'Training', area: 'training' },

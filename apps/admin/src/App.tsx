@@ -6,6 +6,7 @@ import { Login } from './pages/Login.js'
 import { Dashboard } from './pages/Dashboard.js'
 import { Employees } from './pages/Employees.js'
 import { Questions } from './pages/Questions.js'
+import { Library } from './pages/Library.js'
 import { Exams } from './pages/Exams.js'
 import { Grading } from './pages/Grading.js'
 import { Training } from './pages/Training.js'
@@ -51,6 +52,7 @@ export function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/employees" element={<Employees />} />
             <Route path="/questions" element={<Questions />} />
+            <Route path="/library" element={<Library />} />
             <Route path="/exams" element={<Exams />} />
             <Route path="/grading" element={<Grading />} />
             <Route path="/training" element={<Training />} />
