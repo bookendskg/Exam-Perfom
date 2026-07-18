@@ -25,6 +25,7 @@
     "db:migrate": "npm run migrate:dev -w @bookends/db",
     "db:seed": "npm run seed -w @bookends/db",
     "db:studio": "npm run studio -w @bookends/db",
+    "db:dev": "npm run dev:postgres -w @bookends/db",
     "dev": "npm run dev -w @bookends/api"
   },
   "devDependencies": {

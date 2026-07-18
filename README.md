@@ -58,24 +58,46 @@ apps/api/        @bookends/api — the Express API.
 ### Prerequisites
 
 - Node.js 22+ (see `.nvmrc`)
-- A PostgreSQL 15+ instance
+- PostgreSQL 15+ — **optional**, see below
 
-There is no `docker-compose.yml` — point `DATABASE_URL` at any Postgres you have. The test suite does not need one: it downloads and runs a real PostgreSQL 15 binary via `embedded-postgres`.
+There is no `docker-compose.yml`. Point `DATABASE_URL` at any Postgres you have; if you have none, `npm run db:dev` runs one for you. It downloads a real PostgreSQL 15 binary via `embedded-postgres` — the same mechanism the test suite uses — and keeps its data in `packages/db/pgdata`. No Docker, nothing to install system-wide.
+
+The test suite needs neither: it starts its own throwaway cluster on a random port.
 
 ### Setup
 
 ```bash
 npm install
 cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
-npm run db:migrate
-npm run db:seed           # loads outlets, departments, designations
 npm run build
+```
+
+`.env` is read through Node's built-in `--env-file`, so there is no `dotenv` dependency. Generate a signing secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
 ### Running
 
+With the bundled database — two terminals:
+
 ```bash
-npm run dev               # API
+npm run db:dev            # PostgreSQL; migrates and seeds itself on first run
+npm run dev               # the API, in another terminal
+```
+
+Against your own PostgreSQL:
+
+```bash
+npm run db:migrate
+npm run db:seed           # loads outlets, departments, designations
+npm run dev
+```
+
+Either way:
+
+```bash
 npm test                  # full suite — no Docker, no Redis required
 npm run lint
 ```

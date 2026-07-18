@@ -25,6 +25,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
+    "dev:postgres": "tsx scripts/dev-postgres.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {
@@ -35,6 +36,7 @@
     "@prisma/client": "^6.1.0"
   },
   "devDependencies": {
+    "embedded-postgres": "^17.5.0-beta.15",
     "prisma": "^6.1.0",
     "tsx": "^4.19.2"
   }
