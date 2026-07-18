@@ -400,7 +400,13 @@ describe('§8.4 status transitions', () => {
     const timeline = await request(app)
       .get(`/api/v1/employees/${emp.id}/timeline`)
       .set('Authorization', `Bearer ${token}`)
-    expect(timeline.body.data[0].eventType).toBe('suspension')
-    expect(timeline.body.data[0].metadata).toMatchObject({ from: 'active', to: 'suspended' })
+    // Two events exist by now (joined, suspension) and the timeline is ordered
+    // only by eventDate with no tiebreaker — both were written the same day, so
+    // position is not stable. Select by what the event is.
+    const suspension = timeline.body.data.find(
+      (e: { eventType: string }) => e.eventType === 'suspension'
+    )
+    expect(suspension, 'no suspension event in the timeline').toBeDefined()
+    expect(suspension.metadata).toMatchObject({ from: 'active', to: 'suspended' })
   })
 })

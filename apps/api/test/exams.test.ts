@@ -53,6 +53,32 @@ async function tokenFor(opts: Parameters<typeof makeUser>[0]) {
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
 
+interface ErrorDetail {
+  field: string
+  message: string
+}
+
+/**
+ * Select an error by what it says, never by where it sits.
+ *
+ * PublishValidator accumulates up to seven errors in source order, and two
+ * pairs of them share a field ('questions' twice, 'endTime' twice). Indexing
+ * details[0] silently retargets the assertion the moment an earlier check
+ * starts firing — and with a loose .toContain() that reads as a pass.
+ */
+const details = (res: { body: { error?: { details?: ErrorDetail[] } } }): ErrorDetail[] =>
+  res.body.error?.details ?? []
+
+const messages = (res: Parameters<typeof details>[0]) => details(res).map((d) => d.message)
+
+const detail = (res: Parameters<typeof details>[0], field: string): ErrorDetail => {
+  const found = details(res).find((d) => d.field === field)
+  if (!found) {
+    throw new Error(`No error for field "${field}". Got: ${JSON.stringify(details(res))}`)
+  }
+  return found
+}
+
 /** Seeds approved questions straight to the database — Module 4 is proven. */
 async function seedQuestions(
   count: number,
@@ -371,14 +397,15 @@ describe('§11.1 manual and hybrid selection', () => {
   })
 })
 
-describe('§11.3 publish validation', () => {
-  async function draft(token: string, over: Record<string, unknown> = {}) {
-    const ids = await seedQuestions(5)
-    const res = await create(token, exam({ questionIds: ids, totalMarks: 5, ...over }))
-    expect(res.status, JSON.stringify(res.body)).toBe(201)
-    return res.body.data.id as string
-  }
+/** A valid draft exam with 5 one-mark questions. Module-scoped: several suites build on it. */
+async function draft(token: string, over: Record<string, unknown> = {}) {
+  const ids = await seedQuestions(5)
+  const res = await create(token, exam({ questionIds: ids, totalMarks: 5, ...over }))
+  expect(res.status, JSON.stringify(res.body)).toBe(201)
+  return res.body.data.id as string
+}
 
+describe('§11.3 publish validation', () => {
   const publish = (token: string, id: string) =>
     request(app).post(`/api/v1/exams/${id}/publish`).set(auth(token)).send({})
 
@@ -408,7 +435,7 @@ describe('§11.3 publish validation', () => {
 
     const res = await publish(token, id)
     expect(res.status).toBe(400)
-    expect(res.body.error.details[0].message).toContain('total')
+    expect(detail(res, 'totalMarks').message).toContain('questions total 5')
   })
 
   it('refuses when any question is not approved', async () => {
@@ -420,7 +447,7 @@ describe('§11.3 publish validation', () => {
 
     const res = await publish(token, id)
     expect(res.status).toBe(400)
-    expect(res.body.error.details[0].message).toContain('not approved')
+    expect(messages(res).some((m) => m.includes('not approved'))).toBe(true)
   })
 
   it('refuses a date in the past', async () => {
@@ -506,7 +533,7 @@ describe('§11.3 publish validation', () => {
 
     const res = await publish(token, id)
     expect(res.status).toBe(400)
-    expect(res.body.error.details[0].message).toContain('minimum is 30')
+    expect(messages(res).some((m) => m.includes('minimum is 30'))).toBe(true)
   })
 
   it('refuses a window shorter than the exam itself', async () => {
@@ -517,7 +544,9 @@ describe('§11.3 publish validation', () => {
 
     const res = await publish(token, id)
     expect(res.status).toBe(400)
-    expect(res.body.error.details[0].message).toContain('takes 60')
+    // Two errors share field 'endTime' here, so select on the message: the
+    // 30-minute rule and this one are adjacent in the validator.
+    expect(messages(res).some((m) => m.includes('takes 60'))).toBe(true)
   })
 
   it('refuses when an assigned employee has left', async () => {
@@ -592,9 +621,75 @@ describe('exam lifecycle', () => {
   async function published(token: string) {
     const ids = await seedQuestions(5)
     const res = await create(token, exam({ questionIds: ids, totalMarks: 5 }))
-    await request(app).post(`/api/v1/exams/${res.body.data.id}/publish`).set(auth(token)).send({})
+    const pub = await request(app)
+      .post(`/api/v1/exams/${res.body.data.id}/publish`)
+      .set(auth(token))
+      .send({})
+    // Asserted, not assumed: a silently failed publish would leave the exam a
+    // draft and make every "published exam" test below vacuously pass.
+    expect(pub.status, `publish failed: ${JSON.stringify(pub.body)}`).toBe(200)
     return res.body.data.id as string
   }
+
+  /**
+   * §11.1's window rule survives a partial update.
+   *
+   * createExamSchema rejects an inverted window, but a PATCH sending one field
+   * cannot be judged by a schema — it never sees the stored value it is
+   * replacing. The check lives in ExamService.update against merged values.
+   */
+  describe('the window rule survives a partial update', () => {
+    const patch = (token: string, id: string, body: unknown) =>
+      request(app).put(`/api/v1/exams/${id}`).set(auth(token)).send(body)
+
+    it('refuses a startTime that lands after the stored endTime', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await draft(token, { startTime: '10:00', endTime: '12:00' })
+
+      // Only startTime is sent. Nothing in the payload is invalid on its own.
+      const res = await patch(token, id, { startTime: '18:00' })
+
+      expect(res.status).toBe(400)
+      expect(detail(res, 'startTime').message).toContain('18:00 to 12:00')
+    })
+
+    it('refuses an endTime that lands before the stored startTime', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await draft(token, { startTime: '10:00', endTime: '12:00' })
+
+      const res = await patch(token, id, { endTime: '09:00' })
+      expect(res.status).toBe(400)
+      expect(detail(res, 'endTime').message).toContain('10:00 to 09:00')
+    })
+
+    it('refuses an inverted pair sent together', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await draft(token)
+
+      const res = await patch(token, id, { startTime: '15:00', endTime: '14:00' })
+      expect(res.status).toBe(400)
+    })
+
+    it('allows a valid shift of either end', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await draft(token, { startTime: '10:00', endTime: '12:00' })
+
+      expect((await patch(token, id, { startTime: '11:00' })).status).toBe(200)
+      expect((await patch(token, id, { endTime: '15:00' })).status).toBe(200)
+      // And a field that has nothing to do with the window is untouched by it.
+      expect((await patch(token, id, { nameEn: 'Renamed' })).status).toBe(200)
+    })
+
+    it('leaves the stored window intact when it refuses', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await draft(token, { startTime: '10:00', endTime: '12:00' })
+
+      await patch(token, id, { startTime: '18:00' })
+
+      const stored = await testDb().exam.findUniqueOrThrow({ where: { id } })
+      expect(stored.startTime.toISOString()).toContain('T10:00:00')
+    })
+  })
 
   it('freezes a published exam against edits', async () => {
     const { token } = await tokenFor({ role: 'admin' })

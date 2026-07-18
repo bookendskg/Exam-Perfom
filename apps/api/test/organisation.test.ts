@@ -486,8 +486,13 @@ describe('§5.3 outlet employees and stats', () => {
     const res = await request(app).get(`/api/v1/outlets/${aiko.id}/stats`).set(auth(token))
     expect(res.status).toBe(200)
     expect(res.body.data.headcount).toBe(2)
-    expect(res.body.data.byDepartment[0].department.code).toBe('KIT')
-    expect(res.body.data.byDepartment[0].count).toBe(2)
+    // The groupBy behind this carries no orderBy, so select the department
+    // rather than trusting position — single-element only by fixture accident.
+    const kitchen = res.body.data.byDepartment.find(
+      (d: { department: { code: string } }) => d.department.code === 'KIT'
+    )
+    expect(kitchen, `no KIT group: ${JSON.stringify(res.body.data.byDepartment)}`).toBeDefined()
+    expect(kitchen.count).toBe(2)
   })
 
   it('denies stats to a trainer and to staff (§3.2 reports row)', async () => {

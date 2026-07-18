@@ -94,6 +94,9 @@ export class AttemptService {
             scheduledDate: true,
             startTime: true,
             endTime: true,
+            // Selected so examWindow can check it — an exam stored in an
+            // unsupported timezone must not be converted as though it were IST.
+            timezone: true,
             durationMinutes: true,
             totalMarks: true,
             passingPercentage: true,

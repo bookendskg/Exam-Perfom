@@ -207,6 +207,11 @@ export interface ExamTiming {
   scheduledDate: Date
   startTime: Date
   endTime: Date
+  /**
+   * §4.1's per-exam `timezone` column. Optional here because several callers
+   * select only the columns they render; when it IS supplied it is checked.
+   */
+  timezone?: string | null
 }
 
 /**
@@ -230,8 +235,29 @@ export function istInstant(date: Date, time: Date): Date {
   return new Date(utc - IST_OFFSET_MINUTES * 60_000)
 }
 
-/** The instants an exam's window opens and closes. */
+/**
+ * The instants an exam's window opens and closes.
+ *
+ * §4.1 gives every exam its own `timezone` column, defaulting to Asia/Kolkata.
+ * Nothing writes anything else to it today, and {@link istInstant} would
+ * silently convert a Tokyo exam as though it were Indian if anything ever did —
+ * the module-level assertion above cannot catch that, because it checks the
+ * constant rather than the row. So the row is checked here.
+ *
+ * This throws rather than returning an error: a stored timezone this code
+ * cannot honour is a data-integrity problem, not something a caller can
+ * usefully recover from, and computing the wrong window silently is the one
+ * outcome worth crashing to avoid.
+ */
 export function examWindow(exam: ExamTiming): ExamWindow {
+  if (exam.timezone != null && exam.timezone !== BOOKENDS_TIMEZONE) {
+    throw new Error(
+      `Exam window is stored in ${exam.timezone}, but only ${BOOKENDS_TIMEZONE} is ` +
+        `supported — the conversion assumes a fixed +05:30 offset. Per-exam timezones ` +
+        `need a real timezone conversion first.`
+    )
+  }
+
   return {
     opensAt: istInstant(exam.scheduledDate, exam.startTime),
     closesAt: istInstant(exam.scheduledDate, exam.endTime),

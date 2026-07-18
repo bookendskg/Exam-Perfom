@@ -217,7 +217,10 @@ describe('§10.4 validation', () => {
   it('requires English text for every option (§10.1 needs 4)', async () => {
     const token = await tokenFor({ role: 'admin' })
     const res = await upload(token, csv(row({ 16: '' })), '?dryRun=true')
-    expect(res.body.data.rows[0].errors[0].field).toBe('option_d_en')
+    // Last of four per-option pushes, themselves after five earlier checks.
+    expect(res.body.data.rows[0].errors.map((e: { field: string }) => e.field)).toContain(
+      'option_d_en'
+    )
   })
 
   it('requires English question text (§6.2)', async () => {
@@ -231,7 +234,9 @@ describe('§10.4 validation', () => {
     // §10.1 makes a rubric mandatory for this type; §10.4's format has no
     // rubric columns. Better to say so than import an ungradeable question.
     const res = await upload(token, csv(row({ 0: 'video_image' })), '?dryRun=true')
-    expect(res.body.data.rows[0].errors[0].message).toContain('rubric')
+    expect(
+      res.body.data.rows[0].errors.map((e: { message: string }) => e.message).join(' | ')
+    ).toContain('rubric')
   })
 
   it('names the missing required columns', async () => {

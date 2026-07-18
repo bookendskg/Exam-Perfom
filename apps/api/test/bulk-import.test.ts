@@ -136,8 +136,9 @@ describe('§8.3 bulk import — validation and preview', () => {
     const bad = res.body.data.rows.find((r: { lineNumber: number }) => r.lineNumber === 3)
     // Line 3, because the header is line 1 — the number must point at a row the
     // operator can actually find in their spreadsheet.
-    expect(bad.errors[0].field).toBe('outlet_code')
-    expect(bad.errors[0].message).toContain('ZZ')
+    const outlet = bad.errors.find((e: { field: string }) => e.field === 'outlet_code')
+    expect(outlet, `no outlet_code error: ${JSON.stringify(bad.errors)}`).toBeDefined()
+    expect(outlet.message).toContain('ZZ')
   })
 
   it('flags an unknown department and designation', async () => {
@@ -214,9 +215,14 @@ describe('§8.3 bulk import — validation and preview', () => {
 
     // Invisible to a per-row database check: neither row is inserted yet, so
     // both look free.
+    // 'Already registered' is pushed immediately before this one and carries
+    // the same field, so select on the message rather than the position.
     const second = res.body.data.rows[1]
-    expect(second.errors[0].message).toContain('Duplicated in this file')
-    expect(second.errors[0].message).toContain('row 2')
+    const duplicate = second.errors.find((e: { message: string }) =>
+      e.message.includes('Duplicated in this file')
+    )
+    expect(duplicate, `no in-file duplicate error: ${JSON.stringify(second.errors)}`).toBeDefined()
+    expect(duplicate.message).toContain('row 2')
     expect(res.body.data.valid).toBe(1)
   })
 })
@@ -371,7 +377,10 @@ describe('§8.3 bulk import — RBAC', () => {
     // One bad row must not reject the file — it is reported and skipped.
     expect(res.status).toBe(200)
     expect(res.body.data.imported).toBe(1)
-    expect(res.body.data.rows[1].errors[0].message).toContain('do not manage this outlet')
+    // The scope error is the last of five push sites; any earlier one displaces it.
+    expect(
+      res.body.data.rows[1].errors.map((e: { message: string }) => e.message).join(' | ')
+    ).toContain('do not manage this outlet')
     expect(await testDb().employee.count({ where: { phone: '9814000002' } })).toBe(0)
   })
 

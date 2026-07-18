@@ -45,6 +45,13 @@ const EXAM_SELECT = {
  */
 const EDITABLE_STATUSES = ['draft'] as const
 
+/** §4.1 stores start_time/end_time as TIME; Prisma round-trips them on 1970-01-01. */
+const clockTimeToDate = (hhmm: string) => new Date(`1970-01-01T${hhmm}:00.000Z`)
+
+/** 'HH:MM' from a stored TIME, for comparing an incoming value against a stored one. */
+const clockTimeToString = (time: Date) =>
+  `${String(time.getUTCHours()).padStart(2, '0')}:${String(time.getUTCMinutes()).padStart(2, '0')}`
+
 export class ExamService {
   private readonly selector: QuestionSelector
   private readonly validator: PublishValidator
@@ -245,6 +252,32 @@ export class ExamService {
   async update(principal: Principal, scope: Scope, id: string, input: UpdateExamInput) {
     const existing = await this.requireEditable(principal, scope, id)
 
+    /**
+     * createExamSchema rejects a window that ends before it starts, but
+     * updateExamSchema cannot: a PATCH sending only startTime has no endTime to
+     * compare against, because a schema never sees the stored row. So the check
+     * lives here, against the merged values, where both are available. That
+     * also subsumes the both-fields-sent case, which is why the schema is left
+     * alone rather than given a partial copy of this rule.
+     *
+     * §11.3 does refuse to publish a negative window, so this is not the only
+     * thing standing between an inverted window and a candidate. It is worth
+     * having anyway: without it the invalid state persists, and the complaint
+     * arrives at publish time attributed to endTime rather than to the request
+     * that actually broke it.
+     */
+    const startTime = input.startTime ?? clockTimeToString(existing.startTime)
+    const endTime = input.endTime ?? clockTimeToString(existing.endTime)
+    if (startTime >= endTime) {
+      // Lexical comparison is safe on zero-padded HH:MM, as on create.
+      throw ApiError.validation('The exam window must end after it starts', [
+        {
+          field: input.endTime !== undefined ? 'endTime' : 'startTime',
+          message: `The window would run ${startTime} to ${endTime}`,
+        },
+      ])
+    }
+
     return this.prisma.exam.update({
       where: { id: existing.id },
       data: {
@@ -254,12 +287,8 @@ export class ExamService {
         ...(input.scheduledDate !== undefined
           ? { scheduledDate: new Date(`${input.scheduledDate}T00:00:00.000Z`) }
           : {}),
-        ...(input.startTime !== undefined
-          ? { startTime: new Date(`1970-01-01T${input.startTime}:00.000Z`) }
-          : {}),
-        ...(input.endTime !== undefined
-          ? { endTime: new Date(`1970-01-01T${input.endTime}:00.000Z`) }
-          : {}),
+        ...(input.startTime !== undefined ? { startTime: clockTimeToDate(input.startTime) } : {}),
+        ...(input.endTime !== undefined ? { endTime: clockTimeToDate(input.endTime) } : {}),
         ...(input.totalMarks !== undefined ? { totalMarks: input.totalMarks } : {}),
         ...(input.passingPercentage !== undefined
           ? { passingPercentage: input.passingPercentage }
@@ -494,7 +523,16 @@ export class ExamService {
   private async requireEditable(principal: Principal, scope: Scope, id: string) {
     const exam = await this.prisma.exam.findUnique({
       where: { id },
-      select: { id: true, status: true, outletId: true, createdById: true },
+      // startTime/endTime are selected for update()'s window check, which has to
+      // compare an incoming value against the stored one it would replace.
+      select: {
+        id: true,
+        status: true,
+        outletId: true,
+        createdById: true,
+        startTime: true,
+        endTime: true,
+      },
     })
     if (!exam) throw ApiError.notFound('Exam not found')
     assertInScope(scope, principal, exam, 'write')

@@ -72,18 +72,32 @@ const mcqOption = z.object({
   imageUrl: z.string().url().optional(),
 })
 
+/**
+ * The full §10.1 option-set rules, shared by create and update.
+ *
+ * Extracted rather than written twice because update previously kept the
+ * length check and dropped both refinements, so a PATCH could leave an MCQ
+ * with no correct option or two. Grading reads exactly this array: with none
+ * correct every candidate scores zero on that question, and with two the
+ * winner is whichever the answer key search happens to find first.
+ *
+ * Unlike the exam-window rule, this needs no stored values — the options array
+ * is always sent whole — so it belongs in the schema.
+ */
+const mcqOptions = z
+  .array(mcqOption)
+  // §10.1: "4 options (A, B, C, D)".
+  .length(4, 'An MCQ must have exactly 4 options')
+  .refine((opts) => opts.filter((o) => o.isCorrect).length === 1, {
+    message: 'An MCQ must have exactly one correct option',
+  })
+  .refine((opts) => new Set(opts.map((o) => o.id)).size === opts.length, {
+    message: 'Option ids must be unique',
+  })
+
 const mcqQuestion = baseQuestion.extend({
   type: z.literal('mcq'),
-  options: z
-    .array(mcqOption)
-    // §10.1: "4 options (A, B, C, D)".
-    .length(4, 'An MCQ must have exactly 4 options')
-    .refine((opts) => opts.filter((o) => o.isCorrect).length === 1, {
-      message: 'An MCQ must have exactly one correct option',
-    })
-    .refine((opts) => new Set(opts.map((o) => o.id)).size === opts.length, {
-      message: 'Option ids must be unique',
-    }),
+  options: mcqOptions,
   /** §10.1 supports negative marking, configurable per question. */
   negativeMarks: z.coerce.number().min(0).max(999).optional(),
 })
@@ -196,7 +210,7 @@ export const updateQuestionSchema = z
     marks: z.coerce.number().positive().max(999).optional(),
     negativeMarks: z.coerce.number().min(0).max(999).optional(),
     timeLimitSeconds: z.coerce.number().int().positive().max(3600).nullable().optional(),
-    options: z.array(mcqOption).length(4).optional(),
+    options: mcqOptions.optional(),
     expectedAnswerEn: z.string().trim().optional(),
     expectedAnswerHi: z.string().trim().optional(),
     expectedAnswerGu: z.string().trim().optional(),

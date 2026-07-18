@@ -232,4 +232,28 @@ describe('§12.1 IST wall clock → instants', () => {
     expect(opensAt.toISOString()).not.toBe('2027-03-15T10:00:00.000Z')
     expect(opensAt.getTime()).toBe(new Date('2027-03-15T10:00:00.000Z').getTime() - 330 * 60_000)
   })
+
+  it('accepts the timezone every exam is actually stored with', () => {
+    const window = examWindow({
+      ...timing('2027-03-15', '10:00', '12:00'),
+      timezone: 'Asia/Kolkata',
+    })
+    expect(window.opensAt.toISOString()).toBe('2027-03-15T04:30:00.000Z')
+  })
+
+  it('refuses to convert an exam stored in a timezone it cannot honour', () => {
+    // §4.1 gives every exam a timezone column. Nothing writes anything but the
+    // default today — but the fixed +05:30 offset would silently mis-convert a
+    // Tokyo exam, so the row is checked rather than assumed.
+    expect(() =>
+      examWindow({ ...timing('2027-03-15', '10:00', '12:00'), timezone: 'Asia/Tokyo' })
+    ).toThrow(/only Asia\/Kolkata is supported/)
+  })
+
+  it('converts when the column was not selected', () => {
+    // Several callers select only the columns they render; an absent timezone
+    // must not be treated as a mismatch.
+    const window = examWindow({ ...timing('2027-03-15', '10:00', '12:00'), timezone: null })
+    expect(window.opensAt.toISOString()).toBe('2027-03-15T04:30:00.000Z')
+  })
 })

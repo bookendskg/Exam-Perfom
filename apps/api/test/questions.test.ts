@@ -229,7 +229,10 @@ describe('§10.3 required metadata', () => {
 
     const without = await create(token, body)
     expect(without.status).toBe(400)
-    expect(without.body.error.details[0].message).toContain('source reference')
+    // Last of four addIssue calls in the create superRefine.
+    expect(
+      without.body.error.details.map((d: { message: string }) => d.message).join(' | ')
+    ).toContain('source reference')
 
     // A free-text chapter satisfies §10.3 — not every SOP is uploaded yet.
     expect((await create(token, { ...body, sourceChapter: 'Chapter 3' })).status).toBe(201)
@@ -329,6 +332,76 @@ describe('§10.2 approval workflow', () => {
       .send({ questionTextEn: 'Sneaky edit' })
     expect(res.status).toBe(409)
     expect(res.body.error.details[0].message).toContain('Archive it')
+  })
+
+  /**
+   * §10.1's option-set rules must survive an edit, not just a create.
+   *
+   * The update schema kept the "exactly 4 options" length check but dropped
+   * both refinements, so a PATCH could leave an MCQ with no correct option or
+   * two. Grading reads this array directly: with none correct every candidate
+   * scores zero on the question, and with two, whichever the answer-key search
+   * finds first silently becomes the right answer.
+   */
+  describe('§10.1 option rules survive an update', () => {
+    const editOptions = async (token: string, id: string, options: unknown) =>
+      request(app).put(`/api/v1/questions/${id}`).set(auth(token)).send({ options })
+
+    const options = (over: { isCorrect?: boolean[]; ids?: string[] } = {}) =>
+      ['a', 'b', 'c', 'd'].map((id, i) => ({
+        id: over.ids?.[i] ?? id,
+        textEn: `Option ${id}`,
+        isCorrect: over.isCorrect?.[i] ?? i === 1,
+      }))
+
+    it('refuses an edit leaving no correct option', async () => {
+      const admin = await tokenFor({ role: 'admin' })
+      const id = await draft(admin.token)
+
+      const res = await editOptions(
+        admin.token,
+        id,
+        options({ isCorrect: [false, false, false, false] })
+      )
+      expect(res.status).toBe(400)
+      expect(
+        res.body.error.details.map((d: { message: string }) => d.message).join(' | ')
+      ).toContain('exactly one correct option')
+    })
+
+    it('refuses an edit leaving two correct options', async () => {
+      const admin = await tokenFor({ role: 'admin' })
+      const id = await draft(admin.token)
+
+      const res = await editOptions(
+        admin.token,
+        id,
+        options({ isCorrect: [true, true, false, false] })
+      )
+      expect(res.status).toBe(400)
+    })
+
+    it('refuses duplicate option ids', async () => {
+      const admin = await tokenFor({ role: 'admin' })
+      const id = await draft(admin.token)
+
+      // Two options sharing an id makes the stored answer ambiguous and the
+      // candidate's selectedOptionId unresolvable.
+      const res = await editOptions(admin.token, id, options({ ids: ['a', 'a', 'c', 'd'] }))
+      expect(res.status).toBe(400)
+    })
+
+    it('still accepts a valid option set', async () => {
+      const admin = await tokenFor({ role: 'admin' })
+      const id = await draft(admin.token)
+
+      const res = await editOptions(
+        admin.token,
+        id,
+        options({ isCorrect: [false, false, true, false] })
+      )
+      expect(res.status, JSON.stringify(res.body)).toBe(200)
+    })
   })
 
   it('records who approved it and when', async () => {
