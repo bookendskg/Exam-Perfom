@@ -68,6 +68,12 @@ interface SeedQuestion {
   responseType?: 'image' | 'video' | 'both'
 }
 
+/** Accepts 'HH:MM', 'HH:MM:SS' or 'HH:MM:SS.mmm' and builds a Prisma TIME. */
+function clockTime(value: string): Date {
+  const [h = '00', m = '00', s = '00.000'] = value.split(':')
+  return new Date(`1970-01-01T${h}:${m}:${s}Z`)
+}
+
 interface SeedExamOptions {
   employeeId: string
   questions?: SeedQuestion[]
@@ -128,8 +134,11 @@ async function seedExam(opts: SeedExamOptions) {
       nameHi: 'मासिक रसोई परीक्षा',
       examCode: `EX-T-${String(++examSeq).padStart(3, '0')}`,
       scheduledDate: new Date(`${day}T00:00:00.000Z`),
-      startTime: new Date(`1970-01-01T${opts.startTime ?? '00:00'}:00.000Z`),
-      endTime: new Date(`1970-01-01T${opts.endTime ?? '23:59'}:00.000Z`),
+      startTime: clockTime(opts.startTime ?? '00:00:00.000'),
+      // Not 23:59 — windowStateAt treats closesAt as exclusive, so a window
+      // ending at 23:59:00 reads as closed for the final minute of every IST
+      // day, and the whole suite would fail during it.
+      endTime: clockTime(opts.endTime ?? '23:59:59.999'),
       outletId: ctx.aiko,
       departmentId: ctx.kitchen,
       totalMarks,

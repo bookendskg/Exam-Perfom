@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveExamDate, istMonthOf, istToday } from '../src/scheduling/exam-date.ts'
+import { resolveExamDate, istMonthOf, istToday, examWindow } from '../src/scheduling/exam-date.js'
 
 /**
  * §12.1's rules are pure calendar arithmetic, so they can be checked
@@ -190,5 +190,46 @@ describe('IST month resolution (§12.2)', () => {
   it('reports today in IST', () => {
     expect(istToday(new Date('2027-02-28T18:30:00.000Z'))).toBe('2027-03-01')
     expect(istToday(new Date('2027-03-15T06:30:00.000Z'))).toBe('2027-03-15')
+  })
+})
+
+/**
+ * The DATE + TIME → instant conversion, which §11.3 publish validation and
+ * Module 7's exam taking both depend on. They had one implementation each once,
+ * and the two disagreed by 5h30m: publish validation composed the wall clock as
+ * though it were UTC, so an admin could publish an exam that had already
+ * finished while every candidate correctly saw a closed window.
+ */
+describe('§12.1 IST wall clock → instants', () => {
+  /** Prisma returns a DATE as UTC midnight and a TIME as 1970-01-01T<time>Z. */
+  const date = (iso: string) => new Date(`${iso}T00:00:00.000Z`)
+  const time = (hhmm: string) => new Date(`1970-01-01T${hhmm}:00.000Z`)
+
+  const timing = (day: string, start: string, end: string) => ({
+    scheduledDate: date(day),
+    startTime: time(start),
+    endTime: time(end),
+  })
+
+  it('reads the stored wall clock as Asia/Kolkata', () => {
+    const { opensAt, closesAt } = examWindow(timing('2027-03-15', '10:00', '12:00'))
+
+    // 10:00 IST is 04:30 UTC. Reading it as UTC would open the exam at 15:30
+    // IST — three and a half hours after the staff were told to sit it.
+    expect(opensAt.toISOString()).toBe('2027-03-15T04:30:00.000Z')
+    expect(closesAt.toISOString()).toBe('2027-03-15T06:30:00.000Z')
+  })
+
+  it('rolls back across the date line for early-morning windows', () => {
+    // 04:00 IST is 22:30 UTC on the PREVIOUS day.
+    const { opensAt } = examWindow(timing('2027-03-15', '04:00', '06:00'))
+    expect(opensAt.toISOString()).toBe('2027-03-14T22:30:00.000Z')
+  })
+
+  it('is never the naive UTC composition', () => {
+    // Pins the defect itself: the old combine() returned exactly this.
+    const { opensAt } = examWindow(timing('2027-03-15', '10:00', '12:00'))
+    expect(opensAt.toISOString()).not.toBe('2027-03-15T10:00:00.000Z')
+    expect(opensAt.getTime()).toBe(new Date('2027-03-15T10:00:00.000Z').getTime() - 330 * 60_000)
   })
 })

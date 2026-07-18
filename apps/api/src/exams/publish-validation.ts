@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@bookends/db'
 import { availableLanguages } from '@bookends/core'
+import { examWindow } from '../scheduling/exam-date.js'
 
 /**
  * §11.3 exam validation rules, checked before publishing:
@@ -100,9 +101,19 @@ export class PublishValidator {
       })
     }
 
-    // §11.3: scheduled date must be in the future
-    const startsAt = combine(exam.scheduledDate, exam.startTime)
-    const endsAt = combine(exam.scheduledDate, exam.endTime)
+    /**
+     * §11.3: scheduled date must be in the future.
+     *
+     * `examWindow` converts the stored IST wall clock to real instants. This
+     * check previously composed them as if they were UTC, which put `startsAt`
+     * five and a half hours later than the truth — so the guard was inert for
+     * any exam whose window had opened within the preceding 5h30m, and an admin
+     * could publish an exam that had already started, or already finished.
+     * Module 7 converts correctly, so such an exam published into a window this
+     * check thought was still ahead, and every assignee got "This exam has
+     * closed" the moment they opened it.
+     */
+    const { opensAt: startsAt, closesAt: endsAt } = examWindow(exam)
 
     if (startsAt <= now) {
       errors.push({
@@ -168,21 +179,6 @@ export class PublishValidator {
   }
 }
 
-/**
- * §4.1 stores scheduled_date as DATE and start_time/end_time as TIME, so a
- * usable instant has to be reassembled from the two.
- *
- * Both come back from Prisma as Dates: the date carries the day at 00:00 UTC,
- * the time carries the clock reading on 1970-01-01. Taking the UTC parts of
- * each is what keeps them from drifting through a local-timezone conversion.
- */
-export function combine(date: Date, time: Date): Date {
-  const combined = new Date(date)
-  combined.setUTCHours(
-    time.getUTCHours(),
-    time.getUTCMinutes(),
-    time.getUTCSeconds(),
-    time.getUTCMilliseconds()
-  )
-  return combined
-}
+// The DATE + TIME → instant composition that used to live here has moved to
+// scheduling/exam-date.ts as istInstant/examWindow. It was a second, divergent
+// implementation of a conversion Module 7 also needed, and the two disagreed.

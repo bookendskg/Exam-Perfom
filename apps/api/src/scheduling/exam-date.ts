@@ -163,3 +163,77 @@ export function istToday(now: Date): string {
     day: '2-digit',
   }).format(now)
 }
+
+// ---------------------------------------------------------------------------
+// IST wall clock → real instants
+// ---------------------------------------------------------------------------
+
+/**
+ * §4.1 stores an exam's schedule as a DATE plus two TIMEs, and those
+ * wall-clock values are IST — §12.1 schedules exams for Indian restaurant
+ * shifts. Turning them into an instant is therefore a timezone conversion, and
+ * skipping it is not a rounding error: a 10:00–12:00 exam read as UTC opens at
+ * 15:30 IST, three and a half hours after the staff sitting it were told to
+ * start.
+ *
+ * This lives here, next to the other IST concerns, because it has two callers
+ * in different features — §11.3 publish validation decides whether an exam may
+ * be scheduled, and Module 7 decides whether it may be sat. When those two
+ * disagreed, an admin could publish an exam that no candidate could open.
+ *
+ * India has never observed DST and IST has been a fixed UTC+05:30 since 1945,
+ * so the offset is a constant rather than an Intl lookup. That is a deliberate
+ * simplification of exactly one zone — {@link BOOKENDS_TIMEZONE} — and the
+ * assertion below fails loudly if that zone is ever changed to one with DST.
+ */
+const IST_OFFSET_MINUTES = 330
+
+if (BOOKENDS_TIMEZONE !== 'Asia/Kolkata') {
+  throw new Error(
+    `istInstant assumes a fixed +05:30 offset, which only holds for Asia/Kolkata, ` +
+      `but BOOKENDS_TIMEZONE is ${BOOKENDS_TIMEZONE}. Replace the constant with a real ` +
+      `timezone conversion before shipping.`
+  )
+}
+
+export interface ExamWindow {
+  /** The instant the exam opens. */
+  opensAt: Date
+  /** The instant the exam closes for everyone, regardless of when they started. */
+  closesAt: Date
+}
+
+export interface ExamTiming {
+  scheduledDate: Date
+  startTime: Date
+  endTime: Date
+}
+
+/**
+ * Composes an IST wall-clock date and time into the instant it names.
+ *
+ * Prisma hands back a DATE as UTC midnight and a TIME as 1970-01-01T<time>Z,
+ * so both carry their intended wall-clock values in their UTC fields. Reading
+ * them with getUTC* and subtracting the offset converts IST → UTC exactly
+ * once, in one place.
+ */
+export function istInstant(date: Date, time: Date): Date {
+  const utc = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+    time.getUTCHours(),
+    time.getUTCMinutes(),
+    time.getUTCSeconds(),
+    time.getUTCMilliseconds()
+  )
+  return new Date(utc - IST_OFFSET_MINUTES * 60_000)
+}
+
+/** The instants an exam's window opens and closes. */
+export function examWindow(exam: ExamTiming): ExamWindow {
+  return {
+    opensAt: istInstant(exam.scheduledDate, exam.startTime),
+    closesAt: istInstant(exam.scheduledDate, exam.endTime),
+  }
+}

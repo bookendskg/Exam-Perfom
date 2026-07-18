@@ -19,22 +19,9 @@ const timing = (day: string, start: string, end: string) => ({
   endTime: time(end),
 })
 
-describe('§12.1 exam windows are IST, not UTC', () => {
-  it('reads the stored wall clock as Asia/Kolkata', () => {
-    const { opensAt, closesAt } = examWindow(timing('2027-03-15', '10:00', '12:00'))
-
-    // 10:00 IST is 04:30 UTC. Reading it as UTC would open the exam at 15:30
-    // IST — three and a half hours after the staff were told to sit it.
-    expect(opensAt.toISOString()).toBe('2027-03-15T04:30:00.000Z')
-    expect(closesAt.toISOString()).toBe('2027-03-15T06:30:00.000Z')
-  })
-
-  it('rolls back across the date line for early-morning windows', () => {
-    // 04:00 IST is 22:30 UTC on the PREVIOUS day.
-    const { opensAt } = examWindow(timing('2027-03-15', '04:00', '06:00'))
-    expect(opensAt.toISOString()).toBe('2027-03-14T22:30:00.000Z')
-  })
-
+// The IST → instant conversion itself is tested in exam-date.test.ts, where it
+// now lives. What is tested here is what attempts add on top of it.
+describe('window state', () => {
   it('classifies before, during and after', () => {
     const window = examWindow(timing('2027-03-15', '10:00', '12:00'))
 

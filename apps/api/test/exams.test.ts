@@ -5,6 +5,7 @@ import { buildTestApp } from './helpers/app.js'
 import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
 import { makeUser } from './helpers/factories.js'
 import { formatExamCode, parseExamCode } from '../src/exams/exam-code.js'
+import { PublishValidator } from '../src/exams/publish-validation.js'
 
 let app: Application
 let ctx: { kitchen: string; aiko: string; capiche: string; topic: string; lineCook: string }
@@ -433,6 +434,70 @@ describe('§11.3 publish validation', () => {
     const res = await publish(token, id)
     expect(res.status).toBe(400)
     expect(res.body.error.details.map((d: { field: string }) => d.field)).toContain('scheduledDate')
+  })
+
+  /**
+   * §11.3's future-date rule, at the boundary that actually matters.
+   *
+   * The test above dates the exam six years back, so it passed even while the
+   * validator composed the stored IST wall clock as though it were UTC — an
+   * error of exactly 5h30m, invisible at a distance of years. These drive
+   * PublishValidator directly with an injected `now`, because the boundary is
+   * hours wide and a test that reads the real clock could not address it.
+   *
+   * The exam runs 10:00–12:00 IST on 2027-03-15, which is 04:30–06:30 UTC.
+   */
+  describe('the future-date rule is evaluated in IST', () => {
+    const validatorFor = async (token: string) => {
+      const id = await draft(token, { startTime: '10:00', endTime: '12:00', durationMinutes: 60 })
+      return { id, validator: new PublishValidator(testDb()) }
+    }
+
+    const scheduledDateErrors = (report: { errors: { field: string }[] }) =>
+      report.errors.filter((e) => e.field === 'scheduledDate')
+
+    it('allows an exam that has not opened yet', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const { id, validator } = await validatorFor(token)
+
+      // 09:30 IST — half an hour before it opens.
+      const report = await validator.validate(id, new Date('2027-03-15T04:00:00.000Z'))
+      expect(scheduledDateErrors(report)).toHaveLength(0)
+      expect(report.canPublish).toBe(true)
+    })
+
+    it('refuses an exam whose window has already opened', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const { id, validator } = await validatorFor(token)
+
+      // 10:30 IST — half an hour in. Composed as UTC this instant looks like
+      // it is still 5 hours BEFORE the exam starts, so the guard stayed quiet.
+      const report = await validator.validate(id, new Date('2027-03-15T05:00:00.000Z'))
+      expect(scheduledDateErrors(report)).toHaveLength(1)
+      expect(report.canPublish).toBe(false)
+    })
+
+    it('refuses an exam whose window has already closed', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const { id, validator } = await validatorFor(token)
+
+      // 12:30 IST — half an hour after it ended. This is the case that hurt:
+      // the exam published, and every assignee opening it got "This exam has
+      // closed", because Module 7 reads the same columns correctly.
+      const report = await validator.validate(id, new Date('2027-03-15T07:00:00.000Z'))
+      expect(scheduledDateErrors(report)).toHaveLength(1)
+      expect(report.canPublish).toBe(false)
+    })
+
+    it('still measures the window length correctly', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const { id, validator } = await validatorFor(token)
+
+      // The 30-minute and duration-fit checks subtract two instants carrying
+      // the same offset, so they were never wrong — and must stay right.
+      const report = await validator.validate(id, new Date('2027-03-15T04:00:00.000Z'))
+      expect(report.errors.filter((e) => e.field === 'endTime')).toHaveLength(0)
+    })
   })
 
   it('refuses a window shorter than 30 minutes (§11.3)', async () => {
