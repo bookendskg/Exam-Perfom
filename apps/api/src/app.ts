@@ -16,6 +16,7 @@ import { requirePasswordChange } from './auth/middleware/require-password-change
 import { buildAuthRouter } from './auth/auth.routes.js'
 import { buildEmployeeRouter } from './employees/employee.routes.js'
 import { buildStaffRouter } from './staff/staff.routes.js'
+import { buildAttemptRouter } from './attempts/attempt.routes.js'
 import { buildOrganisationRouters } from './organisation/organisation.routes.js'
 import { buildQuestionRouters } from './questions/question.routes.js'
 import { buildExamRouters } from './exams/exam.routes.js'
@@ -85,6 +86,10 @@ export function buildApp(deps: Deps): Application {
   app.use('/api/v1', requireAuth, roleLimiter(), requirePasswordChange())
 
   app.use('/api/v1/employees', buildEmployeeRouter(deps))
+  // Mounted above /api/v1/staff so /staff/exams/* resolves here. The staff
+  // router has no /exams route, so the order is belt and braces rather than
+  // load-bearing — but it keeps the two from racing if one ever gains one.
+  app.use('/api/v1/staff/exams', buildAttemptRouter(deps))
   app.use('/api/v1/staff', buildStaffRouter(deps))
 
   const { outletRouter, departmentRouter, designationRouter } = buildOrganisationRouters(deps)
