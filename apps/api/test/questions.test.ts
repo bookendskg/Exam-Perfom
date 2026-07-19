@@ -252,6 +252,156 @@ describe('§10.3 required metadata', () => {
   })
 })
 
+/**
+ * The rules createQuestionSchema enforces must survive a partial update.
+ *
+ * Each request below is valid taken alone — the invariant only breaks relative
+ * to the stored row, which a schema never sees. These all went through before
+ * QuestionService.update started checking merged values.
+ */
+describe('§10.1/§10.3 invariants survive a partial update', () => {
+  const edit = (token: string, id: string, body: unknown) =>
+    request(app).put(`/api/v1/questions/${id}`).set(auth(token)).send(body)
+
+  const messages = (res: { body: { error?: { details?: { message: string }[] } } }) =>
+    (res.body.error?.details ?? []).map((d) => d.message).join(' | ')
+
+  const draftOf = async (token: string, body: unknown) => {
+    const res = await create(token, body)
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    return res.body.data.id as string
+  }
+
+  it('refuses a designation minimum that overtakes the stored maximum', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, mcq({ designationLevelMin: 1, designationLevelMax: 3 }))
+
+    // Only the minimum is sent, and 5 is a perfectly legal level on its own.
+    const res = await edit(token, id, { designationLevelMin: 5 })
+    expect(res.status).toBe(400)
+    expect(messages(res)).toContain('cannot exceed the maximum 3')
+  })
+
+  it('refuses a designation maximum that drops below the stored minimum', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, mcq({ designationLevelMin: 4, designationLevelMax: 5 }))
+
+    const res = await edit(token, id, { designationLevelMax: 2 })
+    expect(res.status).toBe(400)
+  })
+
+  it('refuses a theory word limit that inverts against the stored one', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, theory({ minWordLimit: 50, maxWordLimit: 200 }))
+
+    const res = await edit(token, id, { minWordLimit: 500 })
+    expect(res.status).toBe(400)
+    expect(messages(res)).toContain('cannot exceed the maximum 200')
+  })
+
+  it('§10.3 refuses an update that strips the last source reference', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    // Created with a document and no chapter, so clearing the document leaves
+    // the question with no provenance at all.
+    const id = await draftOf(token, mcq({ sourceDocumentId: ctx.document }))
+
+    const res = await edit(token, id, { sourceDocumentId: null })
+    expect(res.status).toBe(400)
+    expect(messages(res)).toContain('source reference is required')
+  })
+
+  it('allows swapping one source reference for the other', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, mcq({ sourceDocumentId: ctx.document }))
+
+    // §10.3 is satisfied by either, so trading a document for a chapter in one
+    // request must be allowed — the merged row still has a reference.
+    const res = await edit(token, id, { sourceDocumentId: null, sourceChapter: 'Chapter 7' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+  })
+
+  it('leaves valid updates alone', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, mcq({ designationLevelMin: 1, designationLevelMax: 3 }))
+
+    expect((await edit(token, id, { designationLevelMin: 2 })).status).toBe(200)
+    expect((await edit(token, id, { difficulty: 'hard' })).status).toBe(200)
+  })
+
+  it('does not persist a rejected update', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, mcq({ designationLevelMin: 1, designationLevelMax: 3 }))
+
+    await edit(token, id, { designationLevelMin: 5 })
+
+    const stored = await testDb().question.findUniqueOrThrow({ where: { id } })
+    expect(stored.designationLevelMin).toBe(1)
+  })
+
+  it('§10.3 refuses clearing a chapter when it is the only reference', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    // The mirror of the sourceDocumentId case: sourceChapter is nullable too,
+    // so the merge has to notice an explicit null on either field.
+    const id = await draftOf(token, theory({ sourceChapter: 'Chapter 3' }))
+
+    const res = await edit(token, id, { sourceChapter: null })
+    expect(res.status).toBe(400)
+    expect(messages(res)).toContain('source reference is required')
+  })
+
+  it('re-checks the video rubric total on a partial update', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await draftOf(token, videoImage({ marks: 10 }))
+
+    // The fourth create rule. Raising marks alone leaves the rubric — still
+    // totalling 10 — describing a different mark scheme from the question.
+    expect((await edit(token, id, { marks: 25 })).status).toBe(400)
+    // Moving both together is fine.
+    expect(
+      (
+        await edit(token, id, {
+          marks: 6,
+          rubric: [
+            { criterion: 'Cheese distribution', maxMarks: 3 },
+            { criterion: 'Basil placement', maxMarks: 3 },
+          ],
+        })
+      ).status
+    ).toBe(200)
+  })
+
+  it('lets an unrelated edit through on a row that is already invalid', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const author = await testDb().user.findFirstOrThrow()
+    // Written straight to the database, as a pre-rule row would have been.
+    const row = await testDb().question.create({
+      data: {
+        type: 'mcq',
+        departmentId: ctx.kitchen,
+        questionTextEn: 'A question with no source reference',
+        marks: 1,
+        status: 'draft',
+        createdById: author.id,
+        options: [
+          { id: 'a', textEn: 'A', isCorrect: true },
+          { id: 'b', textEn: 'B', isCorrect: false },
+          { id: 'c', textEn: 'C', isCorrect: false },
+          { id: 'd', textEn: 'D', isCorrect: false },
+        ],
+      },
+    })
+
+    // KNOWN BEHAVIOUR, asserted so a change to it is deliberate: the §10.3
+    // check is not gated on the request touching a source field, so a legacy
+    // row with no reference cannot be edited at all until one is supplied.
+    // Unlike the template case this strands nothing — questions have no
+    // equivalent of deactivation being blocked — and forcing the missing
+    // reference on first edit is the outcome §10.3 wants.
+    expect((await edit(token, row.id, { difficulty: 'hard' })).status).toBe(400)
+    expect((await edit(token, row.id, { sourceChapter: 'Chapter 1' })).status).toBe(200)
+  })
+})
+
 describe('§10.2 approval workflow', () => {
   async function draft(token: string) {
     const res = await create(token, mcq())

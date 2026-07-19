@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from '@bookends/db'
+import type { Prisma, PrismaClient, QuestionType } from '@bookends/db'
 import {
   pageMeta,
   resolveLanguage,
@@ -161,6 +161,14 @@ export class QuestionService {
         outletId: true,
         createdById: true,
         marks: true,
+        // Selected for assertCreateInvariantsHold, which has to judge each
+        // §10.1/§10.3 rule on the row as it would be AFTER the update.
+        designationLevelMin: true,
+        designationLevelMax: true,
+        minWordLimit: true,
+        maxWordLimit: true,
+        sourceDocumentId: true,
+        sourceChapter: true,
       },
     })
     if (!existing) throw ApiError.notFound('Question not found')
@@ -187,6 +195,8 @@ export class QuestionService {
     if (existing.type === 'video_image' && (input.rubric || input.marks !== undefined)) {
       await this.assertRubricTotals(id, input)
     }
+
+    this.assertCreateInvariantsHold(existing, input)
 
     return this.prisma.question.update({
       where: { id },
@@ -393,6 +403,81 @@ export class QuestionService {
       throw ApiError.validation(`Those fields do not apply to a ${type} question`, [
         { field: wrong[0]!, message: `Not valid for a ${type} question` },
       ])
+    }
+  }
+
+  /**
+   * Re-checks, against the row as it would be AFTER the update, the §10.1 and
+   * §10.3 rules that createQuestionSchema enforces at creation.
+   *
+   * A partial update can break any of them without sending anything invalid on
+   * its own: a PATCH carrying only `designationLevelMax` has no minimum to
+   * compare against, and a schema never sees the row it is modifying. So each
+   * rule is judged here on merged values, the same way assertRubricTotals
+   * already handles the rubric.
+   *
+   * `merge` deliberately tests `undefined` rather than using `??`: these fields
+   * are nullable in the update schema, so an explicit null means "clear this",
+   * and `??` would silently treat that as "leave it alone" — turning a request
+   * that strips a source reference into one that appears to keep it.
+   */
+  private assertCreateInvariantsHold(
+    existing: {
+      type: QuestionType
+      designationLevelMin: number | null
+      designationLevelMax: number | null
+      minWordLimit: number | null
+      maxWordLimit: number | null
+      sourceDocumentId: string | null
+      sourceChapter: string | null
+    },
+    input: UpdateQuestionInput
+  ): void {
+    const merge = <T>(incoming: T | undefined, stored: T): T =>
+      incoming !== undefined ? incoming : stored
+
+    const details: Array<{ field: string; message: string }> = []
+
+    // §10.1: the designation range must not invert.
+    const levelMin = merge(input.designationLevelMin, existing.designationLevelMin)
+    const levelMax = merge(input.designationLevelMax, existing.designationLevelMax)
+    if (levelMin != null && levelMax != null && levelMin > levelMax) {
+      details.push({
+        field: 'designationLevelMin',
+        message: `Minimum designation level ${levelMin} cannot exceed the maximum ${levelMax}`,
+      })
+    }
+
+    // §10.1: theory word limits must not invert. Only theory has them, and the
+    // type cannot change on update, so the stored type decides.
+    if (existing.type === 'theory') {
+      const wordMin = merge(input.minWordLimit, existing.minWordLimit)
+      const wordMax = merge(input.maxWordLimit, existing.maxWordLimit)
+      if (wordMin != null && wordMax != null && wordMin > wordMax) {
+        details.push({
+          field: 'minWordLimit',
+          message: `Minimum word limit ${wordMin} cannot exceed the maximum ${wordMax}`,
+        })
+      }
+    }
+
+    /**
+     * §10.3: a source reference is required, and an update must not be able to
+     * remove the one creation insisted on. Both fields are nullable here, so a
+     * single PATCH clearing whichever one is set would otherwise leave the
+     * question with no provenance at all.
+     */
+    const documentId = merge(input.sourceDocumentId, existing.sourceDocumentId)
+    const chapter = merge(input.sourceChapter, existing.sourceChapter)
+    if (!documentId && !chapter) {
+      details.push({
+        field: 'sourceDocumentId',
+        message: 'A source reference is required (§10.3): a document, or a chapter reference',
+      })
+    }
+
+    if (details.length > 0) {
+      throw ApiError.validation('The update would leave the question invalid', details)
     }
   }
 

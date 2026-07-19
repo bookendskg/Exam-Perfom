@@ -5,6 +5,51 @@ import type { Principal } from '../infra/session-store/index.js'
 import { scopeToWhere, assertInScope, assertCreateInScope } from '../rbac/scope.js'
 import type { CreateTemplateInput, UpdateTemplateInput } from './exam.schemas.js'
 
+/** The §11.1 step 3 numbers that have to reconcile, as plain numbers. */
+interface TemplateDistribution {
+  totalMarks: number
+  mcqCount: number
+  mcqMarksEach: number
+  theoryCount: number
+  theoryMarksEach: number
+  videoImageCount: number
+  videoImageMarksEach: number
+}
+
+/**
+ * §4.1's column defaults, mirrored from schema.prisma.
+ *
+ * Both paths have to judge the row that will EXIST, not the payload that
+ * arrived, and an omitted column does not become zero — it becomes these. Read
+ * the request instead and create disagrees with update about the same
+ * template: `{ totalMarks: 20, mcqCount: 10 }` looks like 10 × 0 = 0 on the way
+ * in, which the "no distribution stated" exemption waves through, and 10 × 1 =
+ * 10 once stored, which fails. That asymmetry made every subsequent update of
+ * such a template — including deactivating it — impossible.
+ */
+const COLUMN_DEFAULTS = {
+  mcqCount: 0,
+  mcqMarksEach: 1,
+  theoryCount: 0,
+  theoryMarksEach: 5,
+  videoImageCount: 0,
+  videoImageMarksEach: 10,
+} as const
+
+/** The distribution fields, plus the total they must reconcile against. */
+const DISTRIBUTION_KEYS = [
+  'totalMarks',
+  'mcqCount',
+  'mcqMarksEach',
+  'theoryCount',
+  'theoryMarksEach',
+  'videoImageCount',
+  'videoImageMarksEach',
+] as const
+
+const num = (value: Prisma.Decimal | number | null | undefined, fallback: number): number =>
+  value === null || value === undefined ? fallback : Number(value)
+
 const TEMPLATE_SELECT = {
   id: true,
   nameEn: true,
@@ -73,7 +118,9 @@ export class TemplateService {
   async create(principal: Principal, scope: Scope, input: CreateTemplateInput) {
     assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
     await this.assertRefs(input)
-    this.assertDistributionAddsUp(input)
+    // Judged against the row that will be written — omitted columns take their
+    // §4.1 defaults, not zero. See COLUMN_DEFAULTS.
+    this.assertDistributionAddsUp(this.resolveDistribution(input, COLUMN_DEFAULTS))
 
     return this.prisma.examTemplate.create({
       data: {
@@ -89,12 +136,54 @@ export class TemplateService {
   async update(principal: Principal, scope: Scope, id: string, input: UpdateTemplateInput) {
     const existing = await this.prisma.examTemplate.findUnique({
       where: { id },
-      select: { id: true, outletId: true, createdById: true },
+      // The distribution columns are selected so the reconciliation below can
+      // judge the template as it would be after the update.
+      select: {
+        id: true,
+        outletId: true,
+        createdById: true,
+        totalMarks: true,
+        mcqCount: true,
+        mcqMarksEach: true,
+        theoryCount: true,
+        theoryMarksEach: true,
+        videoImageCount: true,
+        videoImageMarksEach: true,
+      },
     })
     if (!existing) throw ApiError.notFound('Exam template not found')
 
     assertInScope(scope, principal, existing, 'write')
     await this.assertRefs(input)
+
+    /**
+     * Moving a template INTO or OUT OF global scope is itself a scope change,
+     * so it is checked against the create rule rather than the write rule —
+     * exactly as QuestionService.update does. Without this an outlet_manager
+     * could PATCH `{ outletId: null }` and promote their own template to one
+     * that applies to every outlet.
+     */
+    if (input.outletId !== undefined) {
+      assertCreateInScope(scope, principal, { outletId: input.outletId })
+    }
+
+    /**
+     * §11.1 step 3's reconciliation has to survive a partial update.
+     *
+     * updateTemplateSchema is createTemplateSchema.partial(), so totalMarks is
+     * optional and a PATCH raising mcqCount alone sends nothing invalid on its
+     * own — the imbalance exists only relative to the stored row, which is what
+     * the merge below supplies.
+     *
+     * It runs ONLY when the request touches the distribution. A rename, a
+     * re-scope, and above all `{ isActive: false }` must never be refused
+     * because of numbers the operator did not send: list() hides inactive
+     * templates, so blocking deactivation would leave a template that is known
+     * to be wrong stuck in the picker, unable to be retired.
+     */
+    if (DISTRIBUTION_KEYS.some((key) => input[key] !== undefined)) {
+      this.assertDistributionAddsUp(this.resolveDistribution(input, existing))
+    }
 
     // Templates are copied into exams at creation, not referenced live (§4.1's
     // exam columns duplicate them), so editing one cannot disturb an exam
@@ -110,17 +199,42 @@ export class TemplateService {
   }
 
   /**
+   * Resolves the distribution as it will be stored: incoming values over a
+   * baseline, which is the §4.1 column defaults on create and the stored row on
+   * update. Both paths therefore judge the same thing.
+   */
+  private resolveDistribution(
+    input: Partial<CreateTemplateInput>,
+    baseline: Partial<Record<(typeof DISTRIBUTION_KEYS)[number], Prisma.Decimal | number | null>>
+  ): TemplateDistribution {
+    const resolve = (key: Exclude<(typeof DISTRIBUTION_KEYS)[number], 'totalMarks'>): number =>
+      num(input[key] ?? baseline[key], COLUMN_DEFAULTS[key])
+
+    return {
+      totalMarks: num(input.totalMarks ?? baseline.totalMarks, 0),
+      mcqCount: resolve('mcqCount'),
+      mcqMarksEach: resolve('mcqMarksEach'),
+      theoryCount: resolve('theoryCount'),
+      theoryMarksEach: resolve('theoryMarksEach'),
+      videoImageCount: resolve('videoImageCount'),
+      videoImageMarksEach: resolve('videoImageMarksEach'),
+    }
+  }
+
+  /**
    * §11.1 step 3's per-type counts and marks must reconcile with totalMarks.
    *
-   * A template whose parts do not add up produces exams that fail §11.3 every
-   * time, and the operator would have no idea why — the numbers came from the
-   * template they were told to use.
+   * The columns are declarative today — nothing reads them to build an exam
+   * yet, so an imbalance breaks no runtime behaviour. It is still refused at
+   * the door: these numbers are what an operator reads to understand what the
+   * template produces, and a template stating 20 questions worth 1 mark each
+   * under a 40-mark total is describing an exam that cannot exist.
    */
-  private assertDistributionAddsUp(input: CreateTemplateInput): void {
+  private assertDistributionAddsUp(input: TemplateDistribution): void {
     const parts = [
-      (input.mcqCount ?? 0) * (input.mcqMarksEach ?? 0),
-      (input.theoryCount ?? 0) * (input.theoryMarksEach ?? 0),
-      (input.videoImageCount ?? 0) * (input.videoImageMarksEach ?? 0),
+      input.mcqCount * input.mcqMarksEach,
+      input.theoryCount * input.theoryMarksEach,
+      input.videoImageCount * input.videoImageMarksEach,
     ]
     const summed = parts.reduce((a, b) => a + b, 0)
 

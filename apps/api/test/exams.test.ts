@@ -405,6 +405,204 @@ async function draft(token: string, over: Record<string, unknown> = {}) {
   return res.body.data.id as string
 }
 
+/**
+ * §11.1 step 3 — the template distribution must reconcile with totalMarks.
+ *
+ * These are the first tests to touch /api/v1/exam-templates at all; the router
+ * previously had none, which is how the update path lost the check create
+ * performs.
+ */
+describe('§11.1 exam templates', () => {
+  const template = (over: Record<string, unknown> = {}) => ({
+    nameEn: 'Monthly Kitchen Template',
+    totalMarks: 20,
+    durationMinutes: 60,
+    mcqCount: 20,
+    mcqMarksEach: 1,
+    ...over,
+  })
+
+  const createTemplate = (token: string, body: unknown) =>
+    request(app).post('/api/v1/exam-templates').set(auth(token)).send(body)
+
+  const editTemplate = (token: string, id: string, body: unknown) =>
+    request(app).put(`/api/v1/exam-templates/${id}`).set(auth(token)).send(body)
+
+  const seeded = async (token: string, over: Record<string, unknown> = {}) => {
+    const res = await createTemplate(token, template(over))
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    return res.body.data.id as string
+  }
+
+  it('creates a template whose distribution adds up', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    expect((await createTemplate(token, template())).status).toBe(201)
+  })
+
+  it('refuses a create whose distribution does not add up', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const res = await createTemplate(token, template({ mcqCount: 5 }))
+    expect(res.status).toBe(400)
+    expect(detail(res, 'totalMarks').message).toContain('total 5')
+  })
+
+  it('refuses an update that breaks the reconciliation', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await seeded(token)
+
+    // Only mcqCount is sent, and 5 is legal on its own — the imbalance exists
+    // solely against the stored totalMarks of 20.
+    const res = await editTemplate(token, id, { mcqCount: 5 })
+    expect(res.status).toBe(400)
+    expect(detail(res, 'totalMarks').message).toContain('totalMarks says 20')
+  })
+
+  it('refuses an update that lowers totalMarks below the stored distribution', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await seeded(token)
+
+    const res = await editTemplate(token, id, { totalMarks: 7 })
+    expect(res.status).toBe(400)
+  })
+
+  it('allows an update that keeps both sides in step', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await seeded(token)
+
+    const res = await editTemplate(token, id, { mcqCount: 10, totalMarks: 10 })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+  })
+
+  it('allows an update that touches nothing numeric', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await seeded(token)
+
+    expect((await editTemplate(token, id, { nameEn: 'Renamed' })).status).toBe(200)
+  })
+
+  it('still allows a template that states no distribution at all', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    // §11.1 permits relying on questionSelection alone.
+    const id = await seeded(token, { mcqCount: undefined, mcqMarksEach: undefined })
+
+    expect((await editTemplate(token, id, { durationMinutes: 90 })).status).toBe(200)
+  })
+
+  it('does not persist a rejected update', async () => {
+    const { token } = await tokenFor({ role: 'admin' })
+    const id = await seeded(token)
+
+    await editTemplate(token, id, { mcqCount: 5 })
+
+    const stored = await testDb().examTemplate.findUniqueOrThrow({ where: { id } })
+    expect(stored.mcqCount).toBe(20)
+  })
+
+  /**
+   * Create and update must judge the same thing.
+   *
+   * §4.1 gives the marks-each columns non-zero defaults (1 / 5 / 10), so an
+   * omitted field is not zero once stored. Reading the request instead of the
+   * row made create and update disagree: a count sent without its marks-each
+   * looked like 10 × 0 = 0 on the way in — waved through by the "no
+   * distribution stated" exemption — and 10 × 1 = 10 once stored, which then
+   * failed every subsequent update.
+   */
+  describe('create and update agree about column defaults', () => {
+    it('refuses a count whose implied marks-each does not reconcile', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+
+      // Stored, this is mcqCount 10 × mcqMarksEach 1 = 10, not the 20 claimed.
+      const res = await createTemplate(
+        token,
+        template({ totalMarks: 20, mcqCount: 10, mcqMarksEach: undefined })
+      )
+      expect(res.status).toBe(400)
+      expect(detail(res, 'totalMarks').message).toContain('total 10')
+    })
+
+    it('accepts a count that reconciles against the default marks-each', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      // 10 × the default 1 = 10, which matches.
+      const res = await createTemplate(
+        token,
+        template({ totalMarks: 10, mcqCount: 10, mcqMarksEach: undefined })
+      )
+      expect(res.status, JSON.stringify(res.body)).toBe(201)
+    })
+
+    it('still exempts a template that states no distribution', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const res = await createTemplate(
+        token,
+        template({ totalMarks: 50, mcqCount: undefined, mcqMarksEach: undefined })
+      )
+      expect(res.status, JSON.stringify(res.body)).toBe(201)
+    })
+  })
+
+  /**
+   * A row that is already imbalanced — written before this rule existed, or by
+   * hand — must not become impossible to administer.
+   */
+  describe('an already-imbalanced template stays administrable', () => {
+    /** Written straight to the database, bypassing the service's validation. */
+    const legacy = async () => {
+      const author = await testDb().user.findFirstOrThrow()
+      const row = await testDb().examTemplate.create({
+        data: {
+          nameEn: 'Legacy template',
+          totalMarks: 40,
+          durationMinutes: 60,
+          mcqCount: 20,
+          mcqMarksEach: 1, // 20, not the 40 it claims
+          createdById: author.id,
+        },
+      })
+      return row.id
+    }
+
+    it('can still be renamed', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await legacy()
+
+      const res = await editTemplate(token, id, { nameEn: 'Renamed legacy' })
+      expect(res.status, JSON.stringify(res.body)).toBe(200)
+    })
+
+    it('can still be deactivated', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await legacy()
+
+      // The sharpest case: list() hides inactive templates, so refusing this
+      // would strand a known-bad template in the picker permanently.
+      const res = await editTemplate(token, id, { isActive: false })
+      expect(res.status, JSON.stringify(res.body)).toBe(200)
+    })
+
+    it('is still checked when the update touches the distribution', async () => {
+      const { token } = await tokenFor({ role: 'admin' })
+      const id = await legacy()
+
+      // Opting into the numbers means opting into the rule.
+      expect((await editTemplate(token, id, { mcqCount: 30 })).status).toBe(400)
+      // …and correcting them is allowed.
+      expect((await editTemplate(token, id, { mcqMarksEach: 2 })).status).toBe(200)
+    })
+  })
+
+  it('§3.2 stops an outlet manager promoting a template to global scope', async () => {
+    const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
+    const created = await createTemplate(manager.token, template({ outletId: ctx.aiko }))
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+
+    // outletId null means "every outlet" — a scope change, not an edit, so it
+    // is judged by the create rule exactly as questions are.
+    const res = await editTemplate(manager.token, created.body.data.id, { outletId: null })
+    expect(res.status).toBe(403)
+  })
+})
+
 describe('§11.3 publish validation', () => {
   const publish = (token: string, id: string) =>
     request(app).post(`/api/v1/exams/${id}/publish`).set(auth(token)).send({})
