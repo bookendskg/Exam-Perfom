@@ -4,7 +4,8 @@ import { isLanguage, type Language } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
 import { buildPaper, parseOptions, type PaperQuestionSource } from './paper.js'
 import { examWindow, deadlineFor, windowStateAt, type ExamWindow } from './attempt-window.js'
-import { gradeMcq, summarise, round2 } from './grading.js'
+import { gradeMcq } from './grading.js'
+import { finaliseAssignment } from './finalise.js'
 import type { SaveResponseInput, StartAttemptInput, ListAttemptsQuery } from './attempt.schemas.js'
 
 /**
@@ -325,16 +326,9 @@ export class AttemptService {
       return { examQuestion: eq, existing, marks, marksObtained, isCorrect }
     })
 
-    const summary = summarise(
-      graded.map((g) => ({
-        responseType: g.examQuestion.question.type as QuestionType,
-        marksObtained: g.marksObtained,
-        maxMarks: g.marks,
-      })),
-      Number(exam.totalMarks),
-      Number(exam.passingPercentage)
-    )
-
+    // The scoring itself is not computed here: finaliseAssignment re-reads the
+    // rows written below and summarises them, which is the same path Module 8's
+    // grader takes. Computing it twice would be two chances to diverge.
     await this.prisma.$transaction(async (tx) => {
       for (const g of graded) {
         /**
@@ -366,21 +360,15 @@ export class AttemptService {
         }
       }
 
-      await tx.examAssignment.update({
-        where: { id: assignmentId },
-        data: {
-          status: summary.awaitingManualGrading ? 'submitted' : 'graded',
-          submittedAt: now,
-          ...(summary.awaitingManualGrading
-            ? {}
-            : {
-                gradedAt: now,
-                totalMarksObtained: new Prisma.Decimal(summary.totalMarksObtained),
-                percentage: new Prisma.Decimal(summary.percentage),
-                grade: summary.grade,
-                passed: summary.passed,
-              }),
-        },
+      // Shared with Module 8's grader so the two produce identical end states.
+      // It re-reads the responses written just above, inside this transaction.
+      await finaliseAssignment(tx, {
+        assignmentId,
+        examId: exam.id,
+        totalMarks: Number(exam.totalMarks),
+        passingPercentage: Number(exam.passingPercentage),
+        at: now,
+        submittedAt: now,
       })
 
       // Close any session still open, so §8's analytics see a duration rather
@@ -389,8 +377,6 @@ export class AttemptService {
         where: { examAssignmentId: assignmentId, endedAt: null },
         data: { endedAt: now },
       })
-
-      await this.refreshExamStats(tx, exam.id)
     })
 
     /**
@@ -740,37 +726,5 @@ export class AttemptService {
       // exam allows review.
       correctOptionId: parseOptions(question.options).find((o) => o.isCorrect)?.id ?? null,
     }))
-  }
-
-  /**
-   * Recomputes the exam's denormalised counters (§4.1).
-   *
-   * Aggregated from the assignments rather than incremented, so a re-grade in
-   * Module 8 or a manually corrected row cannot drift the totals — an
-   * increment is only correct if every writer remembers to do it.
-   */
-  private async refreshExamStats(tx: Prisma.TransactionClient, examId: string) {
-    const [attempted, passed, average] = await Promise.all([
-      tx.examAssignment.count({
-        where: { examId, status: { in: ['submitted', 'graded'] } },
-      }),
-      tx.examAssignment.count({ where: { examId, passed: true } }),
-      tx.examAssignment.aggregate({
-        where: { examId, percentage: { not: null } },
-        _avg: { percentage: true },
-      }),
-    ])
-
-    await tx.exam.update({
-      where: { id: examId },
-      data: {
-        totalAttempted: attempted,
-        totalPassed: passed,
-        averageScore:
-          average._avg.percentage == null
-            ? null
-            : new Prisma.Decimal(round2(Number(average._avg.percentage))),
-      },
-    })
   }
 }
