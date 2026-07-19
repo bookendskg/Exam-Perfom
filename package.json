@@ -26,7 +26,9 @@
     "db:seed": "npm run seed -w @bookends/db",
     "db:studio": "npm run studio -w @bookends/db",
     "db:dev": "npm run dev:postgres -w @bookends/db",
-    "dev": "npm run dev -w @bookends/api"
+    "dev": "npm run dev -w @bookends/api",
+    "db:demo": "npm run demo -w @bookends/db",
+    "dev:web": "npm run dev -w @bookends/web"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

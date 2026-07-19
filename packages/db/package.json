@@ -26,7 +26,8 @@
     "studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
     "dev:postgres": "tsx scripts/dev-postgres.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "demo": "tsx scripts/demo-data.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
