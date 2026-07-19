@@ -33,6 +33,20 @@ async function main() {
       { port: config.PORT, env: config.NODE_ENV, sessionStore: config.SESSION_STORE },
       'API listening'
     )
+
+    /**
+     * The structured log above carries the port as a JSON field, which a
+     * terminal cannot turn into a link — there is no URL text in it to click.
+     * Outside production, print the address plainly so there is.
+     */
+    if (!config.isProduction) {
+      const url = `http://localhost:${config.PORT}`
+      process.stdout.write(
+        `\n  Bookends API ready\n` +
+          `    API     ${url}/api/v1\n` +
+          `    Health  ${url}/api/v1/health\n\n`
+      )
+    }
   })
 
   // Drain in-flight requests before dropping the database connection, or a
@@ -54,7 +68,23 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'))
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
+  /**
+   * "Can't reach database server" is the single most common way this fails on
+   * a fresh checkout, and a raw Prisma stack trace does not tell you the one
+   * thing you need to know: the database is a separate process you have to
+   * start. Say so, then still print the error.
+   */
+  const message = error instanceof Error ? error.message : String(error)
+  if (/reach database server|ECONNREFUSED|P1001/i.test(message)) {
+    console.error(
+      `\n  Cannot reach the database at the URL in .env\n\n` +
+        `  If you are using the bundled one, start it first, in its own terminal:\n` +
+        `      npm run db:dev\n\n` +
+        `  Otherwise point DATABASE_URL at a PostgreSQL 15+ instance you have.\n`
+    )
+  }
+
   console.error('Failed to start API:', error)
   process.exit(1)
 })
