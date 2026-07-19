@@ -234,6 +234,30 @@ describe('§3.2 the grading queue', () => {
     expect(res.body.data).toHaveLength(0)
   })
 
+  it('cannot be widened by asking for another outlet', async () => {
+    const mine = await candidate('AK')
+    const theirs = await candidate('CP')
+    await submittedAttempt({ employeeId: mine.employeeId, token: mine.token })
+    await submittedAttempt({
+      employeeId: theirs.employeeId,
+      token: theirs.token,
+      outletId: ctx.capiche,
+    })
+
+    const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
+
+    // The filter must narrow what scope allows, never replace it. Merging the
+    // two into one object silently let this through.
+    const res = await request(app)
+      .get('/api/v1/grading/queue')
+      .query({ outletId: ctx.capiche })
+      .set(auth(manager.token))
+
+    expect(res.status).toBe(200)
+    expect(res.body.data).toHaveLength(0)
+    expect(res.body.meta.total).toBe(0)
+  })
+
   it('§3.2 scopes an outlet manager to their own outlet', async () => {
     const mine = await candidate('AK')
     const theirs = await candidate('CP')

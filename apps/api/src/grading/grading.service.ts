@@ -54,9 +54,16 @@ export class GradingService {
 
     const where: Prisma.ExamAssignmentWhereInput = {
       status: query.status === 'all' ? { in: [...GRADABLE_STATUSES] } : 'submitted',
+      /**
+       * Scope and caller filter are AND-ed, never merged.
+       *
+       * Spreading them into one object looks equivalent and is not: both
+       * constrain `outletId`, so the caller's value replaces the scope's and an
+       * outlet_manager passing ?outletId=<another outlet> reads a queue that is
+       * not theirs. A filter may only ever narrow what scope already allows.
+       */
       employee: {
-        ...employeeWhere,
-        ...(query.outletId ? { outletId: query.outletId } : {}),
+        AND: [employeeWhere, ...(query.outletId ? [{ outletId: query.outletId }] : [])],
       },
       ...(query.examId ? { examId: query.examId } : {}),
       responses: {
