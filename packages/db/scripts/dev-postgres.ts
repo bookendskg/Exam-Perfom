@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { createConnection } from 'node:net'
 
 /**
  * A development PostgreSQL, for machines with neither Docker nor a local
@@ -56,7 +57,41 @@ const pg = new EmbeddedPostgres({
   initdbFlags: ['--encoding=UTF8', '--locale=C'],
 })
 
+/** Is something already listening on the port? */
+async function portInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: '127.0.0.1' })
+    const done = (inUse: boolean) => {
+      socket.destroy()
+      resolve(inUse)
+    }
+    socket.once('connect', () => done(true))
+    socket.once('error', () => done(false))
+    socket.setTimeout(1000, () => done(false))
+  })
+}
+
 async function main() {
+  /**
+   * Starting a second cluster on a taken port fails deep inside initdb/pg_ctl,
+   * which surfaces as a rejection carrying no message at all — the script used
+   * to print "Failed to start the development database: undefined". Almost
+   * always it just means one is already running from another terminal, so
+   * check first and say so.
+   */
+  if (await portInUse(PORT)) {
+    console.log(
+      `\n  A PostgreSQL is already listening on port ${PORT}.\n\n` +
+        `  If that is this database, you do not need to start it again —\n` +
+        `  just run the API:\n` +
+        `      npm run dev\n\n` +
+        `  DATABASE_URL="${url}"\n\n` +
+        `  If it is a different PostgreSQL, stop it (or change PORT in\n` +
+        `  packages/db/scripts/dev-postgres.ts) and run this again.\n`
+    )
+    process.exit(0)
+  }
+
   if (!alreadyInitialised) {
     mkdirSync(dataDir, { recursive: true })
     console.log('Initialising a new PostgreSQL cluster (first run only)...')
@@ -97,8 +132,26 @@ async function main() {
   process.on('SIGTERM', () => void shutdown())
 }
 
-main().catch(async (err) => {
-  console.error('Failed to start the development database:', err)
+main().catch(async (err: unknown) => {
+  /**
+   * embedded-postgres rejects with undefined when pg_ctl fails, so printing the
+   * error alone produced a bare "undefined" that named neither the problem nor
+   * a next step. Say what is known, and point at the log the cluster writes.
+   */
+  const described = err instanceof Error ? err.message : err ? String(err) : ''
+
+  console.error(`\n  Failed to start the development database.\n`)
+  if (described) console.error(`  ${described}\n`)
+  console.error(
+    `  Things worth checking:\n` +
+      `    - Is one already running? Another terminal, or a system PostgreSQL\n` +
+      `      on port ${PORT}.\n` +
+      `    - If a previous run was killed, the cluster may need recovering:\n` +
+      `      delete ${dataDir}\n` +
+      `      and run this again (it re-migrates and re-seeds; local data is lost).\n` +
+      `    - The cluster's own log: ${join(dataDir, 'postmaster.log')}\n`
+  )
+
   // A cluster left running after a failed migration would block the next
   // attempt with "port already in use", which reads as a different problem.
   try {
