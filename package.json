@@ -22,10 +22,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "npm run generate -w @bookends/db",
+    "db:deploy": "npm run migrate:deploy -w @bookends/db",
     "db:migrate": "npm run migrate:dev -w @bookends/db",
     "db:seed": "npm run seed -w @bookends/db",
     "db:studio": "npm run studio -w @bookends/db",
-    "db:dev": "npm run dev:postgres -w @bookends/db",
     "dev": "npm run dev -w @bookends/api",
     "db:demo": "npm run demo -w @bookends/db",
     "dev:web": "npm run dev -w @bookends/web"

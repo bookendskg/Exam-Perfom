@@ -71,17 +71,21 @@ async function main() {
 main().catch((error: unknown) => {
   /**
    * "Can't reach database server" is the single most common way this fails on
-   * a fresh checkout, and a raw Prisma stack trace does not tell you the one
-   * thing you need to know: the database is a separate process you have to
-   * start. Say so, then still print the error.
+   * a fresh checkout, and a raw Prisma stack trace does not tell you where to
+   * look. The database is hosted now, so the causes are configuration or
+   * connectivity rather than a process nobody started. Say so, then still
+   * print the error.
    */
   const message = error instanceof Error ? error.message : String(error)
   if (/reach database server|ECONNREFUSED|P1001/i.test(message)) {
     console.error(
-      `\n  Cannot reach the database at the URL in .env\n\n` +
-        `  If you are using the bundled one, start it first, in its own terminal:\n` +
-        `      npm run db:dev\n\n` +
-        `  Otherwise point DATABASE_URL at a PostgreSQL 15+ instance you have.\n`
+      `\n  Cannot reach the database at DATABASE_URL.\n\n` +
+        `  Worth checking, in order:\n` +
+        `    - .env exists and DATABASE_URL is filled in (copy .env.example).\n` +
+        `    - It is the POOLED Supabase URL, port 6543, ending in\n` +
+        `      ?pgbouncer=true — not the direct one.\n` +
+        `    - The project is not paused in the Supabase dashboard.\n` +
+        `    - The password in the URL is URL-encoded if it contains @ : / or ?\n`
     )
   }
 

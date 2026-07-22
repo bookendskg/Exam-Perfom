@@ -73,7 +73,11 @@ export async function setup() {
   // and passing an args array with shell:true (needed for npx on Windows) trips
   // Node's DEP0190 unescaped-arguments warning.
   const dbPackage = fileURLToPath(new URL('../../../packages/db', import.meta.url))
-  const childEnv = { ...process.env, DATABASE_URL: url }
+  // DIRECT_URL as well as DATABASE_URL: the datasource declares `directUrl` for
+  // Supabase's pooler, and Prisma resolves that variable for every CLI command
+  // even when — as here — there is no pooler and the two are the same endpoint.
+  // Leaving it unset fails with "Environment variable not found: DIRECT_URL".
+  const childEnv = { ...process.env, DATABASE_URL: url, DIRECT_URL: url }
 
   execSync('npx prisma migrate deploy', { cwd: dbPackage, env: childEnv, stdio: 'pipe' })
 

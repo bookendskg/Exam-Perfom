@@ -58,19 +58,28 @@ apps/api/        @bookends/api — the Express API.
 ### Prerequisites
 
 - Node.js 22+ (see `.nvmrc`)
-- PostgreSQL 15+ — **optional**, see below
+- A Supabase project (or any PostgreSQL 15+ you can reach)
 
-There is no `docker-compose.yml`. Point `DATABASE_URL` at any Postgres you have; if you have none, `npm run db:dev` runs one for you. It downloads a real PostgreSQL 15 binary via `embedded-postgres` — the same mechanism the test suite uses — and keeps its data in `packages/db/pgdata`. No Docker, nothing to install system-wide.
+There is no `docker-compose.yml` and no local database to start. Development runs against hosted Postgres, so `npm run dev` is the only process you need.
 
-The test suite needs neither: it starts its own throwaway cluster on a random port.
+The test suite is unaffected by any of this: it starts its own throwaway PostgreSQL on a random port and never touches Supabase. Tests need no credentials and no network.
 
 ### Setup
 
 ```bash
 npm install
-cp .env.example .env      # then fill in DATABASE_URL and JWT_SECRET
+cp .env.example .env      # then fill in the two database URLs and JWT_SECRET
 npm run build
 ```
+
+Both database URLs come from the Supabase dashboard, under **Project Settings → Database → Connection string**. They are different endpoints and both are needed:
+
+| Variable | Port | Used by |
+|---|---|---|
+| `DATABASE_URL` | 6543, pooled | the API's own traffic |
+| `DIRECT_URL` | 5432, direct | `prisma migrate`, `introspect`, `studio` |
+
+Keep `?pgbouncer=true` on `DATABASE_URL` — it stops Prisma emitting prepared statements, which transaction-mode pooling cannot support. Do not add `connection_limit=1`; that is a serverless setting and this API is a long-lived process. If the password contains `@ : / ?`, URL-encode it.
 
 `.env` is read through Node's built-in `--env-file`, so there is no `dotenv` dependency. Generate a signing secret with:
 
@@ -80,27 +89,29 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 ### Running
 
-With the bundled database — two terminals:
+Once, to prepare the database:
 
 ```bash
-npm run db:dev            # PostgreSQL; migrates and seeds itself on first run
-npm run dev               # the API, in another terminal
+npm run db:deploy         # applies migrations
+npm run db:seed           # loads outlets, departments, designations
 ```
 
-Against your own PostgreSQL:
+Then, in a single terminal:
 
 ```bash
-npm run db:migrate
-npm run db:seed           # loads outlets, departments, designations
 npm run dev
 ```
 
-Either way:
-
 ```bash
-npm test                  # full suite — no Docker, no Redis required
+npm test                  # full suite — no Docker, no Redis, no Supabase
 npm run lint
 ```
+
+### Writing a migration
+
+`npm run db:deploy` (`prisma migrate deploy`) applies existing migrations and is what you want against Supabase.
+
+Authoring a *new* migration is different: `prisma migrate dev` needs a shadow database that it creates and drops itself, and Supabase does not grant `CREATE DATABASE`. Point `SHADOW_DATABASE_URL` at a throwaway PostgreSQL you control, then run `npm run db:migrate`.
 
 ### Seeding a first admin
 

@@ -14,9 +14,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # No `services:` block on purpose. The suite boots a real PostgreSQL 15 via
-    # embedded-postgres, and sessions live in Postgres rather than Redis, so
-    # neither needs a container here.
+    # The test suite needs nothing here: it boots its own PostgreSQL 15 via
+    # embedded-postgres on a random port, and sessions live in Postgres rather
+    # than Redis. This container exists solely as a shadow database for the
+    # migration-drift check below, which needs CREATE DATABASE rights — so it
+    # cannot use Supabase, and cannot borrow the suite's cluster either (that
+    # one is torn down before this step runs).
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +71,4 @@ jobs:
             --shadow-database-url "$SHADOW_DATABASE_URL" \
             --exit-code
         env:
-          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shadow
-        # Needs a live Postgres for the shadow database; the suite's embedded
-        # instance is gone by now. Enable once a CI Postgres service exists.
-        continue-on-error: true
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

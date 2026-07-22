@@ -18,6 +18,17 @@
 import { PrismaClient } from '@prisma/client'
 import { hashPassword } from '@bookends/core'
 
+// Run directly by `tsx` from packages/db, which does not load the monorepo-root
+// .env the way the API does. Load it so a bare `npm run db:demo` works, without
+// overriding an env a caller has already set.
+if (!process.env['DATABASE_URL']) {
+  try {
+    process.loadEnvFile(new URL('../../../.env', import.meta.url))
+  } catch {
+    /* no root .env — Prisma will fail with a clear "not found" */
+  }
+}
+
 const prisma = new PrismaClient()
 
 const DEMO_PASSWORD = 'BookendsDev1'

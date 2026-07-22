@@ -28,7 +28,10 @@ export async function assertUtf8Database(prisma: PrismaClient): Promise<void> {
     throw new Error(
       `The database encoding is ${encoding ?? 'unknown'}, but this application requires UTF8.\n` +
         `Hindi and Gujarati content (§6) cannot be stored in ${encoding}.\n` +
-        `Recreate the database with:\n` +
+        `Supabase databases are UTF8, so this most likely means DATABASE_URL is\n` +
+        `pointed at some other server. Check it.\n` +
+        `On a self-managed PostgreSQL the database has to be recreated — the\n` +
+        `encoding cannot be altered in place:\n` +
         `  CREATE DATABASE bookends WITH ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;`
     )
   }

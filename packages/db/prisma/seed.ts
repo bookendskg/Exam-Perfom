@@ -9,6 +9,18 @@ import { PrismaClient, Role } from '@prisma/client'
 import { hashPassword, validatePassword } from '@bookends/core'
 import { seedReferenceData } from '../src/seed-data.js'
 
+// The API loads the monorepo-root .env via Node's --env-file, but this script
+// is run directly by `tsx` from packages/db, which does not. Load it here so a
+// bare `npm run db:seed` works — unless the caller (the test harness, CI) has
+// already injected DATABASE_URL, in which case theirs must win untouched.
+if (!process.env['DATABASE_URL']) {
+  try {
+    process.loadEnvFile(new URL('../../../.env', import.meta.url))
+  } catch {
+    /* no root .env — Prisma will then fail with a clear "not found" */
+  }
+}
+
 const prisma = new PrismaClient()
 
 async function main() {
@@ -19,6 +31,7 @@ async function main() {
   console.log(`  departments:  ${counts.departments}`)
   console.log(`  designations: ${counts.designations}`)
   console.log(`  outlet/dept mappings: ${counts.mappings}`)
+  console.log(`  permission grants:    ${counts.permissions}`)
 
   const bootstrapPhone = process.env.SEED_ADMIN_PHONE
   const bootstrapPassword = process.env.SEED_ADMIN_PASSWORD
