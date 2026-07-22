@@ -195,7 +195,7 @@ describe('scope: outlet_manager is confined to their own outlet', () => {
 
     const res = await request(app).get('/api/v1/employees').set('Authorization', `Bearer ${token}`)
     expect(res.status).toBe(403)
-    expect(res.body.error.message).toContain('not assigned to manage any outlet')
+    expect(res.body.error.message).toContain('not assigned to any outlet')
   })
 
   it('loses access the moment its outlet assignment is removed', async () => {

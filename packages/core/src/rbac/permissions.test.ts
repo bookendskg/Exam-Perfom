@@ -15,25 +15,33 @@ describe('permission matrix shape', () => {
 
   it('only gives own_outlet to roles that can actually hold an outlet', () => {
     /**
-     * `own_outlet` resolves from Outlet.managerId, which only an outlet_manager
-     * is ever assigned. Granting it to any other role produces an ALWAYS-EMPTY
-     * scope — every query returns nothing and every write 403s, so the role
-     * looks broken rather than restricted.
+     * `own_outlet` resolves from `Principal.scopedOutletIds`. Granting it to a
+     * role that can never appear there produces an ALWAYS-EMPTY scope — every
+     * query returns nothing and every write 403s, so the role looks broken
+     * rather than restricted.
      *
      * That is not hypothetical: §3.2 asks for trainer = "Own outlet", and
-     * transcribing it literally made trainers a dead role until this caught it.
-     * If another role should genuinely be outlet-scoped, it needs a way to be
-     * linked to outlets first.
+     * transcribing it literally DID make trainers a dead role, until this test
+     * caught it and the grant was reverted to 'all'.
+     *
+     * Two routes onto that list now, which is why `trainer` may finally hold it:
+     *  - `Outlet.managerId` — outlet_manager, one outlet held exclusively;
+     *  - `user_outlets` — an explicit assignment, which §3.1 requires because a
+     *    trainer covers SEVERAL outlets.
+     *
+     * A role added here must have a real way to be linked to outlets. Adding one
+     * without that reintroduces exactly the dead role this guards against.
      */
-    const CAN_HOLD_OUTLETS = new Set<string>(['outlet_manager'])
+    const CAN_HOLD_OUTLETS = new Set<string>(['outlet_manager', 'trainer'])
 
     for (const permission of PERMISSION_KEYS) {
       for (const role of ROLES) {
         if (PERMISSIONS[permission][role] !== 'own_outlet') continue
         expect(
           CAN_HOLD_OUTLETS.has(role),
-          `"${permission}" gives ${role} own_outlet scope, but ${role} is never assigned as ` +
-            `Outlet.managerId — their scope would always be empty and the permission dead.`
+          `"${permission}" gives ${role} own_outlet scope, but ${role} can never appear in ` +
+            `scopedOutletIds — no Outlet.managerId and no user_outlets route — so their scope ` +
+            `would always be empty and the permission dead.`
         ).toBe(true)
       }
     }

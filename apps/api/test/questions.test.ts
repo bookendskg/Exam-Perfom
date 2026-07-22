@@ -636,27 +636,53 @@ describe('§3.2 RBAC — question bank', () => {
     expect(other.status).toBe(404)
   })
 
-  it('lets a trainer READ the whole bank but still only edit their own', async () => {
+  /**
+   * Trainer reads are scoped to their assigned outlets — §3.2 as written.
+   *
+   * This test used to assert the opposite ("READ the whole bank"), because
+   * §3.2's "Own outlet" was not implementable: `own_outlet` resolved solely from
+   * Outlet.managerId, a trainer never holds one, so the scope was always empty
+   * and the role would have been dead. `user_outlets` fixed that, so the
+   * assertion now follows the spec rather than the workaround.
+   *
+   * Global questions (outletId null) stay visible — that is the read/write
+   * asymmetry in scope.ts, not a trainer exception.
+   */
+  it('scopes a trainer’s reads to their assigned outlets, and edits to their own work', async () => {
     const admin = await tokenFor({ role: 'admin' })
-    const trainer = await tokenFor({ role: 'trainer' })
-    const theirs = (await create(admin.token, mcq({ outletId: null }))).body.data.id
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
+
+    const globalQuestion = (await create(admin.token, mcq({ outletId: null }))).body.data.id
+    const atAiko = (await create(admin.token, mcq({ outletId: ctx.aiko }))).body.data.id
+    const atCapiche = (await create(admin.token, mcq({ outletId: ctx.capiche }))).body.data.id
     const mine = (await create(trainer.token, mcq({ outletId: null }))).body.data.id
 
-    // §3.2 asks for trainer = "Own outlet" here, which is not implementable —
-    // a trainer never holds an outlet, so that scope is always empty and the
-    // role is dead. See the TRAINER SCOPE note in permissions.ts. Reading the
-    // bank is inherent to authoring and grading.
     const res = await request(app).get('/api/v1/questions').set(auth(trainer.token))
     const ids = res.body.data.map((q: { id: string }) => q.id)
+
     expect(ids).toContain(mine)
-    expect(ids).toContain(theirs)
+    expect(ids).toContain(globalQuestion)
+    expect(ids).toContain(atAiko)
+    // The point of the change: another outlet's content is no longer visible.
+    expect(ids).not.toContain(atCapiche)
 
     // The restriction that matters (§3.2 "Own questions") still holds.
     await request(app)
-      .put(`/api/v1/questions/${theirs}`)
+      .put(`/api/v1/questions/${globalQuestion}`)
       .set(auth(trainer.token))
       .send({ difficulty: 'hard' })
       .expect(404)
+  })
+
+  it('denies a trainer with no outlet assignment, and says why', async () => {
+    const trainer = await tokenFor({ role: 'trainer' })
+
+    // Not an empty list masquerading as "no data": an unassigned trainer is a
+    // misconfigured account, and the 403 has to say so or it looks like a bug.
+    const res = await request(app).get('/api/v1/questions').set(auth(trainer.token))
+
+    expect(res.status).toBe(403)
+    expect(res.body.error.message).toContain('not assigned to any outlet')
   })
 })
 
@@ -730,29 +756,40 @@ describe('the outletId=NULL read/write asymmetry (§4.1)', () => {
       .expect(404)
   })
 
-  it('DOES let an outlet_manager create a global question — §3.2 as written', async () => {
+  /**
+   * The create/edit mismatch is closed.
+   *
+   * These two tests previously asserted the opposite: that an outlet_manager
+   * COULD create a global question, and then could not edit the thing it had
+   * just made. That transcribed §3.2's "Create questions" ✅ literally, and the
+   * older comment flagged the pair as odd and awaiting client confirmation.
+   *
+   * It has now been confirmed as a defect rather than a rule: authoring content
+   * that lands in every outlet's exams is not something an outlet-scoped role
+   * should be able to do, least of all content it cannot subsequently correct.
+   * `question:create` is `own_outlet` for outlet_manager, so the create is
+   * refused at the source and the follow-on test has nothing left to assert.
+   */
+  it('stops an outlet_manager creating a global question', async () => {
     const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
     const res = await create(manager.token, mcq({ outletId: null }))
 
-    // §3.2's "Create questions" row gives outlet_manager an unrestricted ✅,
-    // while "Edit/Delete questions" restricts them to "Own outlet". Taken
-    // literally that is what this asserts — but it is an odd pair: an
-    // outlet_manager can author content that lands in every outlet's exams,
-    // and then cannot edit or archive what they just made (see the test
-    // below). Flagged for the client; the matrix transcribes §3.2 rather than
-    // second-guessing it.
+    expect(res.status).toBe(403)
+    expect(res.body.error.message).toContain('must specify an outlet')
+  })
+
+  it('still lets an outlet_manager create a question for an outlet it manages', async () => {
+    const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
+    const res = await create(manager.token, mcq({ outletId: ctx.aiko }))
+
+    // Narrowing must not break the legitimate case.
     expect(res.status).toBe(201)
   })
 
-  it('and then cannot edit the global question it just created', async () => {
+  it('stops an outlet_manager creating a question for an outlet it does not manage', async () => {
     const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
-    const id = (await create(manager.token, mcq({ outletId: null }))).body.data.id
+    const res = await create(manager.token, mcq({ outletId: ctx.capiche }))
 
-    // The consequence of §3.2's create/edit mismatch, made visible.
-    const res = await request(app)
-      .put(`/api/v1/questions/${id}`)
-      .set(auth(manager.token))
-      .send({ difficulty: 'hard' })
     expect(res.status).toBe(403)
   })
 

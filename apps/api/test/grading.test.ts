@@ -195,7 +195,7 @@ const finalise = (token: string, a: string, body: unknown = {}) =>
 describe('§3.2 the grading queue', () => {
   it('lists attempts waiting on a human', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     await submittedAttempt({ employeeId: staff.employeeId, token: staff.token })
 
     const res = await request(app).get('/api/v1/grading/queue').set(auth(trainer.token))
@@ -208,7 +208,7 @@ describe('§3.2 the grading queue', () => {
 
   it('drops an attempt off the queue once it is graded', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -223,7 +223,7 @@ describe('§3.2 the grading queue', () => {
 
   it('never shows an all-MCQ attempt, which needs no human', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -281,7 +281,7 @@ describe('§3.2 the grading queue', () => {
 describe('§3.2 grading a theory answer', () => {
   it('records the mark, the grader and the comments', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -307,7 +307,7 @@ describe('§3.2 grading a theory answer', () => {
 
   it('refuses more marks than the question is worth', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -324,7 +324,7 @@ describe('§3.2 grading a theory answer', () => {
 
   it('refuses a negative mark', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -338,7 +338,7 @@ describe('§3.2 grading a theory answer', () => {
 
   it('refuses to mark an MCQ through the theory endpoint', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -353,7 +353,7 @@ describe('§3.2 grading a theory answer', () => {
 
   it('still requires a mark for a skipped answer', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -377,7 +377,7 @@ describe('§10.1 grading against a rubric', () => {
 
   it('totals the criteria and stores the breakdown', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await videoAttempt(staff)
 
     const res = await gradeRubric(trainer.token, assignment.id, examQuestions[0]!.id, {
@@ -395,7 +395,7 @@ describe('§10.1 grading against a rubric', () => {
 
   it('refuses a criterion the question does not define', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await videoAttempt(staff)
 
     const res = await gradeRubric(trainer.token, assignment.id, examQuestions[0]!.id, {
@@ -407,7 +407,7 @@ describe('§10.1 grading against a rubric', () => {
 
   it('refuses more than a criterion is worth', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await videoAttempt(staff)
 
     const res = await gradeRubric(trainer.token, assignment.id, examQuestions[0]!.id, {
@@ -421,7 +421,7 @@ describe('§10.1 grading against a rubric', () => {
 describe('§3.2 finalising an attempt', () => {
   it('releases the result once every answer is marked', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -448,7 +448,7 @@ describe('§3.2 finalising an attempt', () => {
 
   it('refuses to release while an answer is unmarked', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -467,7 +467,7 @@ describe('§3.2 finalising an attempt', () => {
 
   it('reaches the candidate through their own result endpoint', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -488,7 +488,7 @@ describe('§3.2 finalising an attempt', () => {
 
   it('refreshes the exam pass rate and average', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { exam, assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -511,7 +511,7 @@ describe('§3.2 finalising an attempt', () => {
 describe('§3.2 regrading and override', () => {
   it('recomputes the result when a mark changes after release', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { exam, assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -576,7 +576,7 @@ describe('§3.2 regrading and override', () => {
       token: staff.token,
     })
 
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const manager = await tokenFor({ role: 'outlet_manager', managesOutletCodes: ['AK'] })
     const body = { marksObtained: 0, graderComments: 'nope' }
 
@@ -632,7 +632,7 @@ describe('§3.2 RBAC and scope', () => {
 describe('grading preconditions', () => {
   it('refuses an attempt the candidate has not submitted', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const author = await testDb().user.findFirstOrThrow()
 
     const question = await testDb().question.create({
@@ -673,7 +673,7 @@ describe('grading preconditions', () => {
 
   it('refuses an exempted attempt', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -693,7 +693,7 @@ describe('grading preconditions', () => {
 
   it('survives two graders marking the same attempt at once', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const admin = await tokenFor({ role: 'admin' })
     const { assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
@@ -719,7 +719,7 @@ describe('grading preconditions', () => {
 
   it('is safe to finalise twice', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { exam, assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -742,7 +742,7 @@ describe('grading preconditions', () => {
 describe('§3.2 the grading screen', () => {
   it('shows the grader the model answer the candidate never saw', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { assignment } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,
@@ -767,7 +767,7 @@ describe('§3.2 the grading screen', () => {
 describe('demotion after a regrade leaves nothing stale', () => {
   it('clears the released result when a mark is removed', async () => {
     const staff = await candidate()
-    const trainer = await tokenFor({ role: 'trainer' })
+    const trainer = await tokenFor({ role: 'trainer', assignedOutletCodes: ['AK'] })
     const { exam, assignment, examQuestions } = await submittedAttempt({
       employeeId: staff.employeeId,
       token: staff.token,

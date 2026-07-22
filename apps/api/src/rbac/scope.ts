@@ -69,7 +69,7 @@ export function scopeToWhere(
     }
 
     case 'own_outlet': {
-      const ids = principal.managedOutletIds
+      const ids = principal.scopedOutletIds
       if (ids.length === 0) throw ApiError.forbidden('No outlets assigned to your account')
 
       if (mode === 'read' && entityHasNullableOutlet(entity)) {
@@ -115,7 +115,7 @@ export function assertInScope(
     if (mode === 'read') return
     throw ApiError.forbidden('This record applies to all outlets and cannot be edited here')
   }
-  if (!principal.managedOutletIds.includes(record.outletId)) throw ApiError.notFound()
+  if (!principal.scopedOutletIds.includes(record.outletId)) throw ApiError.notFound()
 }
 
 /**
@@ -136,9 +136,9 @@ export function assertCreateInScope(
 
   const target = payload.outletId
   if (!target) {
-    throw ApiError.forbidden('You must specify an outlet you manage')
+    throw ApiError.forbidden('You must specify an outlet you are assigned to')
   }
-  if (!principal.managedOutletIds.includes(target)) {
-    throw ApiError.forbidden('You cannot create records for an outlet you do not manage')
+  if (!principal.scopedOutletIds.includes(target)) {
+    throw ApiError.forbidden('You cannot create records for an outlet you are not assigned to')
   }
 }

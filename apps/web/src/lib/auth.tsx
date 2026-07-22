@@ -9,7 +9,7 @@ export type Role = 'super_admin' | 'admin' | 'outlet_manager' | 'trainer' | 'hr'
  * The panel's view of who is signed in.
  *
  * Normalised on purpose: /auth/login returns `user.id` while /auth/me returns
- * `userId`, and only /auth/me carries departmentId and managedOutletIds.
+ * `userId`, and only /auth/me carries departmentId and scopedOutletIds.
  * Mapping both into one shape here keeps that difference out of every screen.
  * Note neither endpoint returns a phone number, so there is no name to show.
  */
@@ -19,7 +19,7 @@ export interface CurrentUser {
   employeeId: string | null
   outletId: string | null
   departmentId?: string | null
-  managedOutletIds?: string[]
+  scopedOutletIds?: string[]
 }
 
 /** GET /auth/me */
@@ -29,7 +29,7 @@ interface MeResponse {
   employeeId: string | null
   outletId: string | null
   departmentId: string | null
-  managedOutletIds: string[]
+  scopedOutletIds: string[]
   mustChangePassword: boolean
 }
 
@@ -97,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           employeeId: data.employeeId,
           outletId: data.outletId,
           departmentId: data.departmentId,
-          managedOutletIds: data.managedOutletIds,
+          scopedOutletIds: data.scopedOutletIds,
         })
         // /auth/me is reachable while the gate is up (it sits above the guard),
         // so the flag has to be read from the payload rather than inferred
@@ -147,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         employeeId: data.employeeId,
         outletId: data.outletId,
         departmentId: data.departmentId,
-        managedOutletIds: data.managedOutletIds,
+        scopedOutletIds: data.scopedOutletIds,
       })
     },
     []

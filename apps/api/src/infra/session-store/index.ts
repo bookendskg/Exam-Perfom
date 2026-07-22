@@ -22,8 +22,13 @@ export interface Principal {
   /** Where the employee works. For display and defaults, NOT for authorisation. */
   outletId: string | null
   departmentId: string | null
-  /** Authoritative outlet_manager scope, from Outlet.managerId. May be empty. */
-  managedOutletIds: string[]
+  /**
+   * The outlets this principal's `own_outlet` scope covers. May be empty.
+   *
+   * Union of outlets MANAGED (Outlet.managerId) and outlets ASSIGNED
+   * (user_outlets). Deliberately excludes Employee.outletId — see toPrincipal.
+   */
+  scopedOutletIds: string[]
   mustChangePassword: boolean
 }
 

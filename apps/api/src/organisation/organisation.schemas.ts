@@ -39,6 +39,18 @@ export const updateOutletSchema = createOutletSchema
     isActive: z.boolean().optional(),
     // Explicit null clears the assignment; undefined leaves it untouched.
     managerId: z.string().uuid('Must be a valid user id').nullable().optional(),
+    /**
+     * Users assigned to cover this outlet (§3.1 — a trainer spans several).
+     *
+     * Declarative: the array replaces the whole set, so `[]` clears it and
+     * omitting the field leaves it untouched. This is an authorisation grant,
+     * not roster data — it gives `own_outlet` scope over an outlet the user does
+     * not manage.
+     */
+    assignedUserIds: z
+      .array(z.string().uuid('Must be a valid user id'))
+      .max(100, 'Too many users for one outlet')
+      .optional(),
   })
 
 export const createDepartmentSchema = z.object({

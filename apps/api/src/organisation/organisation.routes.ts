@@ -114,7 +114,7 @@ export function buildOrganisationRouters(deps: Deps) {
 
           // An outlet_manager may only enumerate their own outlet's roster; a
           // staff member may not enumerate anyone.
-          if (scope === 'own_outlet' && !principal.managedOutletIds.includes(id)) {
+          if (scope === 'own_outlet' && !principal.scopedOutletIds.includes(id)) {
             throw ApiError.notFound('Outlet not found')
           }
           if (scope === 'own_resource') throw ApiError.forbidden()

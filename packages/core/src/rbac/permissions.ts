@@ -16,27 +16,30 @@ import type { Role } from '../roles.js'
 export type Scope = 'all' | 'own_outlet' | 'own_resource' | 'none'
 
 /**
- * TRAINER SCOPE — a deliberate deviation from §3.2. Needs client sign-off.
+ * TRAINER SCOPE — now §3.2 as written, via the `user_outlets` table.
  *
- * §3.2 gives `trainer` "Own outlet" on employee and question reads. That scope
- * is not implementable as written:
+ * This was previously a documented deviation: trainers held 'all' on employee,
+ * question, exam and grading reads. The reason was structural, not laziness —
+ * `own_outlet` resolved solely from `Outlet.managerId`, which only an
+ * outlet_manager ever holds, so a trainer's scope was ALWAYS empty. Since the
+ * route gate 403s on an empty `own_outlet`, setting §3.2's value would not have
+ * tightened the role; it would have deleted it.
  *
- *  - `own_outlet` resolves from `Outlet.managerId`, which only an
- *    outlet_manager ever holds. A trainer's managedOutletIds is therefore
- *    ALWAYS empty, so "own outlet" means ∅ and the trainer gets 403 on
- *    everything — a dead role, exactly like outlet_manager was before Module 3.
- *  - The obvious alternative — resolving a trainer's outlet from
- *    `Employee.outletId` — contradicts §3.1, which says "Trainer can belong to
- *    multiple outlets". Employee.outletId is singular, and §4.1 has no
- *    trainer↔outlets table to express the plural.
+ * Resolving a trainer's outlet from `Employee.outletId` was not an option
+ * either: §3.1 says a trainer belongs to MULTIPLE outlets, and that column is
+ * singular.
  *
- * So §3.1 and §3.2 disagree, and §4.1 cannot model either reading. Until that
- * is resolved, trainers get 'all' on reads: they author questions across the
- * bank and grade theory answers, so seeing the content is inherent to the job,
- * and a working role beats a dead one. Their WRITES stay 'own_resource'
- * (§3.2's "Own questions"), which is the restriction that actually matters.
+ * `user_outlets` resolves both problems. It expresses the plural directly, and
+ * `Principal.scopedOutletIds` is now the union of outlets MANAGED and outlets
+ * ASSIGNED — so a trainer gets a real, non-empty `own_outlet` scope covering
+ * exactly the outlets they cover. Trainer WRITES remain 'own_resource' (§3.2's
+ * "Own questions"), unchanged.
  *
- * To narrow this properly, §4.1 needs a trainer_outlets join table.
+ * Operational consequence: a trainer with no assignment row is denied every
+ * scoped read, with an explanatory 403. That is correct — but it means
+ * assignments must exist before this matrix is seeded. The `user_outlets`
+ * migration backfills existing trainers from their own employee outlet for
+ * exactly this reason.
  */
 
 // prettier-ignore
@@ -46,15 +49,19 @@ export type Scope = 'all' | 'own_outlet' | 'own_resource' | 'none'
 export const PERMISSIONS = {
   // --- Employee Management (§3.2) -------------------------------------------
   'employee:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
-  // trainer is 'all', not §3.2's "Own outlet" — see TRAINER SCOPE below.
-  'employee:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'all', staff: 'own_resource' },
+  'employee:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'all', staff: 'own_resource' },
   'employee:update': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
   'employee:delete': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
   'employee:photo:upload': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'own_resource' },
 
   // --- Question Bank (§3.2) -------------------------------------------------
-  'question:create': { super_admin: 'all', admin: 'all', outlet_manager: 'all', trainer: 'all', hr: 'none', staff: 'none' },
-  'question:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
+  // outlet_manager was 'all' here while edit/delete were 'own_outlet' — so it
+  // could author a GLOBAL question landing in every outlet's exams and then be
+  // forbidden to edit or archive what it had just made. Narrowed to match.
+  // trainer stays 'all': their create scope is unrestricted by outlet, and
+  // 'own_resource' on update/delete is what confines them to their own work.
+  'question:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
+  'question:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
   'question:update': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_resource', hr: 'none', staff: 'none' },
   'question:delete': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_resource', hr: 'none', staff: 'none' },
   'question:approve': { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
@@ -80,7 +87,7 @@ export const PERMISSIONS = {
   // they grade its responses (§3.2 grading rows) and hr because they own
   // reporting. Staff read exams through /staff/*, never here: this exposes the
   // question set, which would be the answer key.
-  'exam:read':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'all', staff: 'none' },
+  'exam:read':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'all', staff: 'none' },
   'exam_template:read':   { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'none', staff: 'none' },
 
   // --- Exam Taking (§3.2) — staff only --------------------------------------
@@ -88,8 +95,8 @@ export const PERMISSIONS = {
   'result:read_own':  { super_admin: 'none', admin: 'none', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'own_resource' },
 
   // --- Grading (§3.2) -------------------------------------------------------
-  'grading:theory':      { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
-  'grading:video_image': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
+  'grading:theory':      { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
+  'grading:video_image': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
   'grading:override':    { super_admin: 'all', admin: 'all', outlet_manager: 'none', trainer: 'none', hr: 'none', staff: 'none' },
 
   // --- Reports & Analytics (§3.2) -------------------------------------------
@@ -119,9 +126,9 @@ export const PERMISSIONS = {
   'outlet:stats':       { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'none', hr: 'all', staff: 'none' },
 
   // --- Rewards & Training (§3.2) --------------------------------------------
-  'reward:assign':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
-  'training:assign':          { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
-  'supervisor_remark:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'all', hr: 'none', staff: 'none' },
+  'reward:assign':            { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
+  'training:assign':          { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
+  'supervisor_remark:create': { super_admin: 'all', admin: 'all', outlet_manager: 'own_outlet', trainer: 'own_outlet', hr: 'none', staff: 'none' },
 } as const satisfies Record<string, Record<Role, Scope>>
 // ^ `satisfies Record<string, Record<Role, Scope>>` is load-bearing: it forces
 //   every role to appear on every row. You cannot forget `hr` on a new

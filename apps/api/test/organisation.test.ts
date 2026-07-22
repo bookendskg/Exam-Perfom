@@ -60,7 +60,7 @@ describe('outlet manager assignment — closes the dead-role gap', () => {
     // Starts out unable to do anything.
     const before = await request(app).get('/api/v1/employees').set(auth(manager.token))
     expect(before.status).toBe(403)
-    expect(before.body.error.message).toContain('not assigned to manage any outlet')
+    expect(before.body.error.message).toContain('not assigned to any outlet')
 
     const aiko = await testDb().outlet.findFirstOrThrow({ where: { code: 'AK' } })
     await request(app)
@@ -201,7 +201,7 @@ describe('outlet manager assignment — closes the dead-role gap', () => {
       .send({ phone: manager.phone, password: manager.password })
     const me = await request(app).get('/api/v1/auth/me').set(auth(relogin.body.data.accessToken))
 
-    expect(me.body.data.managedOutletIds.sort()).toEqual([aiko.id, capiche.id].sort())
+    expect(me.body.data.scopedOutletIds.sort()).toEqual([aiko.id, capiche.id].sort())
   })
 })
 

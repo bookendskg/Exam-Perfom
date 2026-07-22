@@ -17,6 +17,13 @@ export interface MakeUserOptions {
   withEmployee?: boolean
   /** Outlets this user manages (drives outlet_manager scope via Outlet.managerId). */
   managesOutletCodes?: string[]
+  /**
+   * Outlets this user is assigned to cover (drives scope via user_outlets).
+   *
+   * This is how a trainer gets a non-empty `own_outlet` scope: they are never
+   * an Outlet.managerId, so without an assignment every scoped read 403s.
+   */
+  assignedOutletCodes?: string[]
   employeeOutletCode?: string
 }
 
@@ -63,7 +70,36 @@ export async function makeUser(opts: MakeUserOptions = {}) {
     })
   }
 
+  if (opts.assignedOutletCodes?.length) {
+    const outlets = await prisma.outlet.findMany({
+      where: { code: { in: opts.assignedOutletCodes } },
+      select: { id: true },
+    })
+    await prisma.userOutlet.createMany({
+      data: outlets.map((o) => ({ userId: user.id, outletId: o.id })),
+      skipDuplicates: true,
+    })
+  }
+
   return { user, password, phone }
+}
+
+/**
+ * A trainer wired to the outlets they cover.
+ *
+ * Trainers hold `own_outlet` scope on every read, and that scope comes only from
+ * `user_outlets` — a trainer is never an Outlet.managerId. A bare
+ * `makeUser({ role: 'trainer' })` therefore produces an account that 403s on
+ * everything, which is correct behaviour but almost never what a test means.
+ * Defaults to Aiko so the common case is one call.
+ */
+export async function makeTrainer(outletCodes: string[] = ['AK'], opts: MakeUserOptions = {}) {
+  return makeUser({
+    ...opts,
+    role: 'trainer',
+    assignedOutletCodes: outletCodes,
+    mustChangePassword: opts.mustChangePassword ?? false,
+  })
 }
 
 /**

@@ -234,7 +234,7 @@ export function buildAuthRouter(deps: Deps) {
           employeeId: principal.employeeId,
           outletId: principal.outletId,
           departmentId: principal.departmentId,
-          managedOutletIds: principal.managedOutletIds,
+          scopedOutletIds: principal.scopedOutletIds,
           mustChangePassword: principal.mustChangePassword,
         })
       )

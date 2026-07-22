@@ -36,7 +36,7 @@ export class OutletService {
       orderBy: { code: 'asc' },
       select: {
         ...OUTLET_SELECT,
-        manager: { select: { id: true, phone: true, role: true } },
+        manager: { select: { id: true } },
         _count: { select: { employees: true } },
       },
     })
@@ -47,7 +47,7 @@ export class OutletService {
       where: { id },
       select: {
         ...OUTLET_SELECT,
-        manager: { select: { id: true, phone: true, role: true } },
+        manager: { select: { id: true } },
         departments: { select: { department: { select: { id: true, name: true, code: true } } } },
         _count: { select: { employees: true } },
       },
@@ -136,6 +136,10 @@ export class OutletService {
       await Promise.all(affected.map((userId) => this.sessionStore.invalidatePrincipal(userId)))
     }
 
+    if (input.assignedUserIds !== undefined) {
+      await this.setAssignedUsers(id, input.assignedUserIds)
+    }
+
     // Deactivating an outlet removes it from a manager's scope
     // (resolvePrincipal filters on isActive), so their principal is stale too.
     if (input.isActive === false && existing.managerId) {
@@ -143,6 +147,57 @@ export class OutletService {
     }
 
     return outlet
+  }
+
+  /**
+   * Replaces the set of users assigned to cover an outlet.
+   *
+   * This is an authorisation grant, not roster data: an assignment is what gives
+   * a trainer `own_outlet` scope over an outlet they do not manage (§3.1 says a
+   * trainer spans several). So it gets the same treatment as a manager handover
+   * — everyone who gains or loses an assignment has their cached principal
+   * dropped, or they would keep the old scope until their session idled out.
+   *
+   * Declarative (replace the set) rather than add/remove endpoints, so the
+   * caller states the desired end state and concurrent edits cannot leave a
+   * half-applied list.
+   */
+  private async setAssignedUsers(outletId: string, userIds: string[]): Promise<void> {
+    const desired = [...new Set(userIds)]
+
+    if (desired.length > 0) {
+      const found = await this.prisma.user.findMany({
+        where: { id: { in: desired }, isActive: true },
+        select: { id: true },
+      })
+      if (found.length !== desired.length) {
+        throw ApiError.validation('One or more users could not be assigned', [
+          { field: 'assignedUserIds', message: 'Unknown or deactivated user' },
+        ])
+      }
+    }
+
+    const current = await this.prisma.userOutlet.findMany({
+      where: { outletId },
+      select: { userId: true },
+    })
+    const before = current.map((row) => row.userId)
+
+    await this.prisma.$transaction([
+      // An empty `desired` means "assign nobody", so the filter must drop out
+      // entirely — `notIn: []` matches nothing and would delete none of them.
+      this.prisma.userOutlet.deleteMany({
+        where: { outletId, ...(desired.length > 0 ? { userId: { notIn: desired } } : {}) },
+      }),
+      this.prisma.userOutlet.createMany({
+        data: desired.map((userId) => ({ outletId, userId })),
+        skipDuplicates: true,
+      }),
+    ])
+
+    // Anyone on either side of the change — added or removed.
+    const affected = [...new Set([...before, ...desired])]
+    await Promise.all(affected.map((userId) => this.sessionStore.invalidatePrincipal(userId)))
   }
 
   /** §5.3 GET /outlets/:id/employees. */
@@ -172,7 +227,7 @@ export class OutletService {
     // outlet:stats is own_outlet for an outlet_manager. 404 rather than 403 —
     // consistent with the rest of the API, and a 403 would confirm the outlet
     // exists.
-    if (scope === 'own_outlet' && !principal.managedOutletIds.includes(id)) {
+    if (scope === 'own_outlet' && !principal.scopedOutletIds.includes(id)) {
       throw ApiError.notFound('Outlet not found')
     }
 

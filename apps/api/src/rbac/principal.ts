@@ -14,6 +14,10 @@ import type { Principal } from '../infra/session-store/index.js'
 export const PRINCIPAL_USER_INCLUDE = {
   employee: { select: { id: true, outletId: true, departmentId: true } },
   outletsManaged: { where: { isActive: true }, select: { id: true } },
+  outletAssignments: {
+    where: { outlet: { isActive: true } },
+    select: { outletId: true },
+  },
 } as const
 
 /**
@@ -30,20 +34,38 @@ export interface UserWithScope {
   mustChangePassword: boolean
   employee: { id: string; outletId: string; departmentId: string | null } | null
   outletsManaged: Array<{ id: string }>
+  outletAssignments: Array<{ outletId: string }>
 }
 
 /**
  * Builds the authorisation context for a user.
  *
- * The outlet_manager scope comes from Outlet.managerId, NOT Employee.outletId.
- * These are different facts: outletId is where someone *works*, managerId is
- * what they *manage*. Unioning them would silently couple permissions to HR
- * data entry — transferring a manager's posting would change what they can
- * touch, with nothing in the audit trail saying permissions changed.
+ * `scopedOutletIds` unions exactly two facts, and deliberately excludes a third:
  *
- * The schema allows one manager to hold several outlets, so the scope is a list.
+ *  - outlets the user MANAGES (`Outlet.managerId`) — an outlet_manager's scope;
+ *  - outlets the user is ASSIGNED to (`user_outlets`) — how a trainer covers
+ *    several outlets, per §3.1.
+ *
+ * Both are explicit grants of authority, so unioning them is correct.
+ *
+ * `Employee.outletId` — where the person *works* — is NOT included. That is HR
+ * data, and coupling permissions to it would mean transferring someone's posting
+ * silently changed what they can touch, with nothing in the audit trail saying
+ * permissions had changed. The distinction is the whole reason this field is
+ * named `scopedOutletIds` rather than the older `managedOutletIds`: it now
+ * carries more than management, but still not employment.
+ *
+ * Inactive outlets are filtered out on both sides, so deactivating an outlet
+ * removes it from every scope on the next request.
  */
 export function toPrincipal(user: UserWithScope, sessionId: string): Principal {
+  const scopedOutletIds = [
+    ...new Set([
+      ...user.outletsManaged.map((o) => o.id),
+      ...user.outletAssignments.map((a) => a.outletId),
+    ]),
+  ]
+
   return {
     userId: user.id,
     role: user.role as Role,
@@ -52,7 +74,7 @@ export function toPrincipal(user: UserWithScope, sessionId: string): Principal {
     employeeId: user.employee?.id ?? null,
     outletId: user.employee?.outletId ?? null,
     departmentId: user.employee?.departmentId ?? null,
-    managedOutletIds: user.outletsManaged.map((o) => o.id),
+    scopedOutletIds,
     mustChangePassword: user.mustChangePassword,
   }
 }

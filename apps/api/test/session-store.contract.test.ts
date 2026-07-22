@@ -41,7 +41,7 @@ function principalFor(userId: string, sessionId: string): Principal {
     employeeId: null,
     outletId: null,
     departmentId: null,
-    managedOutletIds: [],
+    scopedOutletIds: [],
     mustChangePassword: false,
   }
 }

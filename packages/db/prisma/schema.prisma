@@ -270,8 +270,40 @@ model User {
   identities         UserIdentity[]
   mfaFactors         UserMfaFactor[]
   emailVerifications EmailVerificationToken[]
+  outletAssignments  UserOutlet[]
 
   @@map("users")
+}
+
+/// Outlets a user is assigned to cover, for authorisation scope.
+///
+/// Distinct from `Outlet.managerId`, which says who *manages* an outlet. This
+/// says who *works across* one, and the two are different facts: §3.1 states a
+/// trainer belongs to several outlets, while a manager holds theirs singly and
+/// exclusively. Reusing managerId for trainers would also break the rule that
+/// only an outlet_manager may be assigned as a manager.
+///
+/// It exists because §3.2 grants `trainer` "own outlet" on employee and question
+/// reads, and that scope was previously unimplementable: `own_outlet` resolved
+/// solely from `Outlet.managerId`, which a trainer never holds, so their scope
+/// was always empty and the role would have been denied everything. Trainers
+/// were given `all` as the lesser evil. This table is what makes the narrower,
+/// correct scope possible.
+///
+/// Not trainer-specific — any role may be attached to outlets.
+model UserOutlet {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  outletId  String   @map("outlet_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outlet Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, outletId])
+  @@index([userId])
+  @@index([outletId])
+  @@map("user_outlets")
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +693,7 @@ model Outlet {
   examTemplates   ExamTemplate[]
   exams           Exam[]
   scheduleConfigs ExamScheduleConfig[]
+  assignedUsers   UserOutlet[]
 
   @@map("outlets")
 }

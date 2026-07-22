@@ -52,10 +52,10 @@ export function requirePermission(permission: Permission): RequestHandler {
         // An outlet_manager with no managed outlet has an empty scope. Every
         // scoped query would return nothing, which reads as a broken account
         // rather than a permission problem — so say so plainly.
-        if (scope === 'own_outlet' && req.principal.managedOutletIds.length === 0) {
+        if (scope === 'own_outlet' && req.principal.scopedOutletIds.length === 0) {
           next(
             ApiError.forbidden(
-              'Your account is not assigned to manage any outlet. Contact an administrator.'
+              'Your account is not assigned to any outlet. Contact an administrator.'
             )
           )
           return

@@ -28,6 +28,9 @@ const MUTABLE_TABLES = [
   // Lockout state is durable now, so it must be reset between tests or a test
   // that deliberately fails a login leaves the next one locked out.
   'login_attempts',
+  // Outlet assignments drive authorisation scope, so a leftover row from one
+  // test would silently widen the next one's principal.
+  'user_outlets',
   'exam_responses',
   'exam_sessions',
   'exam_assignments',

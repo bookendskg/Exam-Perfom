@@ -175,7 +175,7 @@ export class SchedulerService {
         employeeId: null,
         outletId: null,
         departmentId: null,
-        managedOutletIds: [],
+        scopedOutletIds: [],
         mustChangePassword: false,
       }
 
