@@ -84,7 +84,7 @@ export class TokenService {
   /** A fresh opaque refresh token and the hash to persist alongside it. */
   mintRefreshToken(): { token: string; hash: string } {
     const token = randomBytes(32).toString('base64url')
-    return { token, hash: hashRefreshToken(token) }
+    return { token, hash: hashOpaqueToken(token) }
   }
 
   refreshExpiryDate(): Date {
@@ -93,10 +93,15 @@ export class TokenService {
 }
 
 /**
- * sha256, not argon2. The input is already 256 bits of entropy, so there is
- * nothing to brute-force and a slow KDF would only add latency to every refresh.
- * Fixed 64-char hex matches the CHAR(64) column.
+ * Hashes a high-entropy opaque token for storage.
+ *
+ * sha256, not argon2. The input is already 256 random bits, so there is nothing
+ * to brute-force and a slow KDF would only add latency to every refresh. Fixed
+ * 64-char hex matches the CHAR(64) columns.
+ *
+ * Shared by refresh tokens and password-reset tokens, which had identical
+ * implementations under different names.
  */
-export function hashRefreshToken(token: string): string {
+export function hashOpaqueToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }

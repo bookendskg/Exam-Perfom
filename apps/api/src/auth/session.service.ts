@@ -2,7 +2,7 @@ import type { PrismaClient } from '@bookends/db'
 import { isStaffRole, type Role } from '@bookends/core'
 import type { Config } from '../config/env.js'
 import type { Principal, SessionStore } from '../infra/session-store/index.js'
-import { type TokenService, hashRefreshToken } from './token.service.js'
+import { type TokenService, hashOpaqueToken } from './token.service.js'
 import { resolvePrincipal } from '../rbac/principal.js'
 import { ApiError } from '../http/api-error.js'
 
@@ -101,7 +101,7 @@ export class SessionService {
    * theft signal, not a race.
    */
   async refresh(rawToken: string, device: DeviceContext): Promise<IssuedSession> {
-    const hash = hashRefreshToken(rawToken)
+    const hash = hashOpaqueToken(rawToken)
     const { token: nextToken, hash: nextHash } = this.tokens.mintRefreshToken()
 
     /**

@@ -6,12 +6,13 @@ import {
   validatePassword,
   type Role,
 } from '@bookends/core'
-import { randomBytes, createHash } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { ApiError } from '../http/api-error.js'
 import { type SessionService, type DeviceContext, type IssuedSession } from './session.service.js'
 import type { Logger } from 'pino'
 import type { NotificationDispatcher } from '../notifications/dispatcher.js'
 import type { LockoutService } from './lockout.service.js'
+import { hashOpaqueToken } from './token.service.js'
 import { ipKey } from '../http/middleware/rate-limit.js'
 
 /** §5.3 reset window. Short: the token is a password-equivalent while it lives. */
@@ -157,7 +158,7 @@ export class AuthService {
     // Generated unconditionally, before the account is known to exist, so the
     // work is identical on both paths. Cheap (32 random bytes + one sha256).
     const token = randomBytes(32).toString('base64url')
-    const tokenHash = hashResetToken(token)
+    const tokenHash = hashOpaqueToken(token)
     const expiresAt = new Date(this.now() + RESET_TOKEN_TTL_MS)
 
     const user = await this.prisma.user.findUnique({ where: { phone } })
@@ -208,7 +209,7 @@ export class AuthService {
    */
   async resetPassword(token: string, newPassword: string): Promise<void> {
     const user = await this.prisma.user.findFirst({
-      where: { passwordResetTokenHash: hashResetToken(token) },
+      where: { passwordResetTokenHash: hashOpaqueToken(token) },
     })
 
     if (!user || !user.passwordResetExpiresAt || !user.isActive) {
@@ -247,9 +248,4 @@ export class AuthService {
 
     await this.sessions.revokeAllForUser(user.id, 'password_reset')
   }
-}
-
-/** sha256, matching the CHAR(64) column. The token is already high-entropy. */
-function hashResetToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex')
 }

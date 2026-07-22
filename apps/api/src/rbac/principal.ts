@@ -101,15 +101,9 @@ export async function resolveSessionPrincipal(
   return { principal: toPrincipal(session.user, session.id), lastSeenAt: session.lastSeenAt }
 }
 
-/**
- * Logs outlet_managers who manage no outlet. Their scope is empty, so every
- * scoped query returns nothing and they appear to have a broken account. Module
- * 2 should reject the role assignment outright; until then, surface it at boot.
- */
-export async function warnOrphanedManagers(prisma: PrismaClient): Promise<string[]> {
-  const orphans = await prisma.user.findMany({
-    where: { role: 'outlet_manager', isActive: true, outletsManaged: { none: {} } },
-    select: { id: true, phone: true },
-  })
-  return orphans.map((o) => o.phone)
-}
+// `warnOrphanedManagers` lived here, claiming in its own comment to "surface it
+// at boot". It was never called from anywhere. The condition it looked for — an
+// outlet_manager who manages no outlet — is already reported where it actually
+// matters: requirePermission returns an explanatory 403 naming the problem the
+// moment such an account touches a scoped route. Removed rather than wired up,
+// because a boot-time log nobody reads is not a second line of defence.

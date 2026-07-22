@@ -214,15 +214,22 @@ enum WhatsAppStatus {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  phone        String    @unique @db.VarChar(15)
-  email        String?   @unique @db.VarChar(255)
-  passwordHash String    @map("password_hash") @db.VarChar(255)
-  role         Role      @default(staff)
-  isActive     Boolean   @default(true) @map("is_active")
-  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  phone           String    @unique @db.VarChar(15)
+  email           String?   @unique @db.VarChar(255)
+  /// When the address in `email` was proved to belong to this user.
+  ///
+  /// NULL means unverified, which is every existing row: the column is added
+  /// after the fact and backfilling it to "verified" would assert something
+  /// nobody has checked. Nothing gates on it yet — login is by phone — so this
+  /// records the fact without changing who can sign in.
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(6)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  role            Role      @default(staff)
+  isActive        Boolean   @default(true) @map("is_active")
+  lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   // §7.3 force password change on first login. Defaults true so that every
   // creation path — seed, HR, bulk import — fails closed rather than silently
@@ -239,29 +246,160 @@ model User {
   // multiple concurrent sessions for admin roles, each with its own device info
   // and idle expiry — one column cannot hold that. See UserSession.
 
-  employee            Employee?            @relation("EmployeeAccount")
-  employeesCreated    Employee[]           @relation("EmployeeCreatedBy")
-  skillsAssessed      EmployeeSkill[]      @relation("SkillAssessedBy")
-  timelineCreated     EmployeeTimeline[]   @relation("TimelineCreatedBy")
-  outletsManaged      Outlet[]             @relation("OutletManager")
-  documentsUploaded   SourceDocument[]     @relation("DocumentUploadedBy")
-  questionsCreated    Question[]           @relation("QuestionCreatedBy")
-  questionsApproved   Question[]           @relation("QuestionApprovedBy")
-  questionReviews     QuestionReview[]     @relation("QuestionReviewer")
-  templatesCreated    ExamTemplate[]       @relation("TemplateCreatedBy")
-  examsCreated        Exam[]               @relation("ExamCreatedBy")
-  assignmentsGraded   ExamAssignment[]     @relation("AssignmentGradedBy")
-  responsesGraded     ExamResponse[]       @relation("ResponseGradedBy")
-  certificatesIssued  Certificate[]        @relation("CertificateIssuedBy")
-  rewardsAwarded      Reward[]             @relation("RewardAwardedBy")
-  trainingAssigned    TrainingAssignment[] @relation("TrainingAssignedBy")
-  remarksCreated      SupervisorRemark[]   @relation("RemarkCreatedBy")
-  auditLogs           AuditLog[]
-  notifications       Notification[]
-  settingsUpdated     Setting[]            @relation("SettingUpdatedBy")
-  sessions            UserSession[]
+  employee           Employee?                @relation("EmployeeAccount")
+  employeesCreated   Employee[]               @relation("EmployeeCreatedBy")
+  skillsAssessed     EmployeeSkill[]          @relation("SkillAssessedBy")
+  timelineCreated    EmployeeTimeline[]       @relation("TimelineCreatedBy")
+  outletsManaged     Outlet[]                 @relation("OutletManager")
+  documentsUploaded  SourceDocument[]         @relation("DocumentUploadedBy")
+  questionsCreated   Question[]               @relation("QuestionCreatedBy")
+  questionsApproved  Question[]               @relation("QuestionApprovedBy")
+  questionReviews    QuestionReview[]         @relation("QuestionReviewer")
+  templatesCreated   ExamTemplate[]           @relation("TemplateCreatedBy")
+  examsCreated       Exam[]                   @relation("ExamCreatedBy")
+  assignmentsGraded  ExamAssignment[]         @relation("AssignmentGradedBy")
+  responsesGraded    ExamResponse[]           @relation("ResponseGradedBy")
+  certificatesIssued Certificate[]            @relation("CertificateIssuedBy")
+  rewardsAwarded     Reward[]                 @relation("RewardAwardedBy")
+  trainingAssigned   TrainingAssignment[]     @relation("TrainingAssignedBy")
+  remarksCreated     SupervisorRemark[]       @relation("RemarkCreatedBy")
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  settingsUpdated    Setting[]                @relation("SettingUpdatedBy")
+  sessions           UserSession[]
+  identities         UserIdentity[]
+  mfaFactors         UserMfaFactor[]
+  emailVerifications EmailVerificationToken[]
 
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Alternative authentication methods
+//
+// Tables only. Nothing reads them yet, and no behaviour changes by their
+// existence — they are here so that adding SSO, magic links or MFA later is a
+// feature branch rather than a migration of the users table under a live
+// system. Each is deliberately additive and nullable.
+//
+// Note on multi-tenancy: none of the unique constraints below would have to be
+// rewritten to add a tenant. `(provider, provider_user_id)` is globally unique
+// by construction — an OIDC subject identifier is unique across the internet,
+// not per customer — and the token columns are hashes. Contrast `users.phone`,
+// which is globally unique today and cannot stay that way once two companies
+// can employ the same person.
+// ---------------------------------------------------------------------------
+
+/// External identity providers a user can sign in with (§7 future work).
+enum AuthProvider {
+  google
+  microsoft
+  /// Passwordless email link. Modelled as a provider so one join table covers
+  /// every non-password credential rather than growing a column per method.
+  magic_link
+}
+
+/// Links a local user to an account at an external provider.
+///
+/// A user may hold several — Google at work, Microsoft at head office — so this
+/// is a table, not columns on User. Deleting the user takes the links with it.
+model UserIdentity {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  provider       AuthProvider
+  /// The provider's stable subject identifier (OIDC `sub`).
+  ///
+  /// NOT the email address. Email is reassignable — a departing employee's
+  /// address can be handed to their replacement — and keying identity on it
+  /// would silently transfer the account. `sub` never changes and is never
+  /// reused.
+  providerUserId String       @map("provider_user_id") @db.VarChar(255)
+
+  /// What the provider asserted at link time. Display and audit only; never
+  /// used to find the account.
+  email String? @db.VarChar(255)
+
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("user_identities")
+}
+
+enum MfaFactorType {
+  /// Authenticator app (RFC 6238).
+  totp
+  sms
+  /// Single-use printed codes, for when the device is lost.
+  recovery_code
+}
+
+/// An enrolled second factor.
+model UserMfaFactor {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  type MfaFactorType
+
+  /// The shared secret, encrypted by the application before it is written.
+  ///
+  /// Never store this in the clear: a leaked database would otherwise let an
+  /// attacker generate valid codes, which defeats the entire point of a second
+  /// factor. Hashing is not an option either — TOTP must recompute the code, so
+  /// the value has to be recoverable, which makes encryption-at-rest the only
+  /// correct treatment.
+  secret String @db.Text
+
+  /// User-facing name, e.g. "iPhone". Lets someone revoke the right device.
+  label String? @db.VarChar(100)
+
+  /// NULL means enrolled but not yet confirmed. A factor must not be treated as
+  /// usable until the user has proved they can generate a code from it, or a
+  /// mis-scanned QR locks them out of their own account.
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(6)
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_mfa_factors")
+}
+
+/// Outstanding email-verification challenges.
+///
+/// A table rather than a column pair on User (as the password-reset flow uses),
+/// because verification is not always about the address currently on the
+/// account: changing an email should verify the NEW address before it replaces
+/// the old, which means the pending address must be stored somewhere that is
+/// not `users.email`.
+model EmailVerificationToken {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// sha256 hex, matching the password-reset convention. The raw token exists
+  /// only inside the message that was sent.
+  tokenHash String @unique @map("token_hash") @db.Char(64)
+
+  /// The address being proved. On a change-of-email flow this is the new one,
+  /// which only lands on users.email once the token is consumed.
+  email String @db.VarChar(255)
+
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  /// Set when redeemed. Kept rather than deleted so a replayed link can be told
+  /// apart from an invented one in the audit trail.
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
 }
 
 /// Per-period counter backing §4.1's exam codes (EX-2026-07-001).
@@ -294,7 +432,7 @@ model UserSession {
   id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId String @map("user_id") @db.Uuid
 
-  refreshTokenHash String @unique @map("refresh_token_hash") @db.Char(64)
+  refreshTokenHash  String    @unique @map("refresh_token_hash") @db.Char(64)
   /// Previous hash, honoured for 60s after rotation so a mobile client that
   /// fires two refreshes at once does not log itself out.
   previousTokenHash String?   @map("previous_token_hash") @db.Char(64)
@@ -305,7 +443,7 @@ model UserSession {
   ipAddress  String? @map("ip_address") @db.Inet
   userAgent  String? @map("user_agent")
 
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Idle clock (§7.5). Throttled — only written when older than ~60s, so an
   /// active exam-taker does not generate a row write per request.
   lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
@@ -385,7 +523,7 @@ model LoginAttempt {
   /// Normalised client key (IPv4 whole, IPv6 collapsed to /64) — see rate-limit.ts.
   ipKey String @map("ip_key") @db.VarChar(64)
   /// Which credential check failed, so change-password abuse is distinguishable.
-  kind String @default("login") @map("kind") @db.VarChar(20)
+  kind  String @default("login") @map("kind") @db.VarChar(20)
 
   attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz(6)
 
@@ -396,20 +534,20 @@ model LoginAttempt {
 }
 
 model Employee {
-  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String  @unique @map("user_id") @db.Uuid
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @unique @map("user_id") @db.Uuid
   /// BK-{OUTLET_CODE}-{SEQ} per §8.2. Never reused, even after departure.
-  employeeCode String? @unique @map("employee_code") @db.VarChar(20)
-  firstName    String  @map("first_name") @db.VarChar(100)
-  lastName     String  @map("last_name") @db.VarChar(100)
-  photoUrl     String? @map("photo_url")
-  phone        String  @db.VarChar(15)
-  email        String? @db.VarChar(255)
+  employeeCode String?   @unique @map("employee_code") @db.VarChar(20)
+  firstName    String    @map("first_name") @db.VarChar(100)
+  lastName     String    @map("last_name") @db.VarChar(100)
+  photoUrl     String?   @map("photo_url")
+  phone        String    @db.VarChar(15)
+  email        String?   @db.VarChar(255)
   dateOfBirth  DateTime? @map("date_of_birth") @db.Date
   gender       Gender?
   address      String?
-  city         String? @db.VarChar(100)
-  state        String? @db.VarChar(100)
+  city         String?   @db.VarChar(100)
+  state        String?   @db.VarChar(100)
 
   // Employment details
   outletId         String           @map("outlet_id") @db.Uuid
@@ -451,16 +589,16 @@ model Employee {
 }
 
 model EmployeeSkill {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId    String   @map("employee_id") @db.Uuid
-  skillName     String   @map("skill_name") @db.VarChar(100)
-  skillCategory String?  @map("skill_category") @db.VarChar(50)
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId       String   @map("employee_id") @db.Uuid
+  skillName        String   @map("skill_name") @db.VarChar(100)
+  skillCategory    String?  @map("skill_category") @db.VarChar(50)
   /// 1..5, enforced by a CHECK constraint added in migration.
-  proficiencyLevel Int   @map("proficiency_level") @db.SmallInt
-  assessedById  String?  @map("assessed_by") @db.Uuid
-  assessedAt    DateTime @default(now()) @map("assessed_at") @db.Timestamptz(6)
-  notes         String?
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  proficiencyLevel Int      @map("proficiency_level") @db.SmallInt
+  assessedById     String?  @map("assessed_by") @db.Uuid
+  assessedAt       DateTime @default(now()) @map("assessed_at") @db.Timestamptz(6)
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   assessedBy User?    @relation("SkillAssessedBy", fields: [assessedById], references: [id])
@@ -492,9 +630,9 @@ model EmployeeTimeline {
 // ---------------------------------------------------------------------------
 
 model Outlet {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String   @db.VarChar(100)
-  code      String   @unique @db.VarChar(10)
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String @db.VarChar(100)
+  code String @unique @db.VarChar(10)
 
   /// High-water mark for employee codes at this outlet (§8.2).
   ///
@@ -502,16 +640,16 @@ model Outlet {
   /// "even after employee departure", and MAX+1 would re-issue the code of a
   /// deleted employee. Incremented via UPDATE .. RETURNING, which takes a row
   /// lock and so serialises concurrent hires at the same outlet.
-  lastEmployeeSeq Int @default(0) @map("last_employee_seq")
-  address   String?
-  city      String?  @db.VarChar(100)
-  state     String?  @db.VarChar(100)
-  phone     String?  @db.VarChar(15)
-  email     String?  @db.VarChar(255)
-  managerId String?  @map("manager_id") @db.Uuid
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lastEmployeeSeq Int      @default(0) @map("last_employee_seq")
+  address         String?
+  city            String?  @db.VarChar(100)
+  state           String?  @db.VarChar(100)
+  phone           String?  @db.VarChar(15)
+  email           String?  @db.VarChar(255)
+  managerId       String?  @map("manager_id") @db.Uuid
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   manager User? @relation("OutletManager", fields: [managerId], references: [id])
 
@@ -644,14 +782,14 @@ model Question {
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
   // Classification
-  type                 QuestionType
-  difficulty           Difficulty   @default(medium)
-  topicId              String?      @map("topic_id") @db.Uuid
-  departmentId         String       @map("department_id") @db.Uuid
+  type                QuestionType
+  difficulty          Difficulty   @default(medium)
+  topicId             String?      @map("topic_id") @db.Uuid
+  departmentId        String       @map("department_id") @db.Uuid
   /// NULL = all outlets.
-  outletId             String?      @map("outlet_id") @db.Uuid
-  designationLevelMin  Int?         @default(1) @map("designation_level_min") @db.SmallInt
-  designationLevelMax  Int?         @default(5) @map("designation_level_max") @db.SmallInt
+  outletId            String?      @map("outlet_id") @db.Uuid
+  designationLevelMin Int?         @default(1) @map("designation_level_min") @db.SmallInt
+  designationLevelMax Int?         @default(5) @map("designation_level_max") @db.SmallInt
 
   // Trilingual content
   questionTextEn String  @map("question_text_en")
@@ -762,17 +900,17 @@ model ExamTemplate {
   designationId String? @map("designation_id") @db.Uuid
 
   // Structure
-  totalMarks         Decimal @map("total_marks") @db.Decimal(6, 2)
-  passingPercentage  Decimal @default(40.0) @map("passing_percentage") @db.Decimal(5, 2)
-  durationMinutes    Int     @default(60) @map("duration_minutes")
+  totalMarks        Decimal @map("total_marks") @db.Decimal(6, 2)
+  passingPercentage Decimal @default(40.0) @map("passing_percentage") @db.Decimal(5, 2)
+  durationMinutes   Int     @default(60) @map("duration_minutes")
 
   // Question distribution
-  mcqCount             Int?     @default(0) @map("mcq_count")
-  mcqMarksEach         Decimal? @default(1.0) @map("mcq_marks_each") @db.Decimal(5, 2)
-  theoryCount          Int?     @default(0) @map("theory_count")
-  theoryMarksEach      Decimal? @default(5.0) @map("theory_marks_each") @db.Decimal(5, 2)
-  videoImageCount      Int?     @default(0) @map("video_image_count")
-  videoImageMarksEach  Decimal? @default(10.0) @map("video_image_marks_each") @db.Decimal(5, 2)
+  mcqCount            Int?     @default(0) @map("mcq_count")
+  mcqMarksEach        Decimal? @default(1.0) @map("mcq_marks_each") @db.Decimal(5, 2)
+  theoryCount         Int?     @default(0) @map("theory_count")
+  theoryMarksEach     Decimal? @default(5.0) @map("theory_marks_each") @db.Decimal(5, 2)
+  videoImageCount     Int?     @default(0) @map("video_image_count")
+  videoImageMarksEach Decimal? @default(10.0) @map("video_image_marks_each") @db.Decimal(5, 2)
 
   /// Auto-selection rules per §11.2.
   questionSelection Json? @map("question_selection")
@@ -805,11 +943,11 @@ model Exam {
   id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   templateId String? @map("template_id") @db.Uuid
 
-  nameEn String  @map("name_en") @db.VarChar(255)
-  nameHi String? @map("name_hi") @db.VarChar(255)
-  nameGu String? @map("name_gu") @db.VarChar(255)
+  nameEn   String  @map("name_en") @db.VarChar(255)
+  nameHi   String? @map("name_hi") @db.VarChar(255)
+  nameGu   String? @map("name_gu") @db.VarChar(255)
   /// Auto-generated: EX-2026-07-001.
-  examCode String @unique @map("exam_code") @db.VarChar(20)
+  examCode String  @unique @map("exam_code") @db.VarChar(20)
 
   // Schedule
   scheduledDate DateTime @map("scheduled_date") @db.Date
@@ -851,11 +989,11 @@ model Exam {
   designation Designation?  @relation(fields: [designationId], references: [id])
   createdBy   User          @relation("ExamCreatedBy", fields: [createdById], references: [id])
 
-  examQuestions       ExamQuestion[]
-  assignments         ExamAssignment[]
-  certificates        Certificate[]
-  trainingTriggered   TrainingAssignment[] @relation("TrainingTriggeringExam")
-  supervisorRemarks   SupervisorRemark[]
+  examQuestions     ExamQuestion[]
+  assignments       ExamAssignment[]
+  certificates      Certificate[]
+  trainingTriggered TrainingAssignment[] @relation("TrainingTriggeringExam")
+  supervisorRemarks SupervisorRemark[]
 
   @@index([scheduledDate])
   @@index([outletId])
@@ -914,17 +1052,17 @@ model ExamAssignment {
 }
 
 model ExamScheduleConfig {
-  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  dayOfMonth    Int                  @default(15) @map("day_of_month") @db.SmallInt
-  fallbackRule  ScheduleFallbackRule @default(next_monday) @map("fallback_rule")
-  isActive      Boolean              @default(true) @map("is_active")
+  id           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dayOfMonth   Int                  @default(15) @map("day_of_month") @db.SmallInt
+  fallbackRule ScheduleFallbackRule @default(next_monday) @map("fallback_rule")
+  isActive     Boolean              @default(true) @map("is_active")
   /// NULL = global setting.
-  outletId      String?              @map("outlet_id") @db.Uuid
-  templateId    String?              @map("template_id") @db.Uuid
+  outletId     String?              @map("outlet_id") @db.Uuid
+  templateId   String?              @map("template_id") @db.Uuid
 
-  notifyDaysBefore    Int      @default(3) @map("notify_days_before")
-  reminderDayBefore   Boolean? @default(true) @map("reminder_day_before")
-  reminderMorningOf   Boolean? @default(true) @map("reminder_morning_of")
+  notifyDaysBefore  Int      @default(3) @map("notify_days_before")
+  reminderDayBefore Boolean? @default(true) @map("reminder_day_before")
+  reminderMorningOf Boolean? @default(true) @map("reminder_morning_of")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -995,8 +1133,8 @@ model ExamSession {
   startedAt  DateTime  @map("started_at") @db.Timestamptz(6)
   endedAt    DateTime? @map("ended_at") @db.Timestamptz(6)
 
-  tabSwitches    Int?  @default(0) @map("tab_switches")
-  appBackgrounds Int?  @default(0) @map("app_backgrounds")
+  tabSwitches          Int?  @default(0) @map("tab_switches")
+  appBackgrounds       Int?  @default(0) @map("app_backgrounds")
   /// [{ type, timestamp, details }]
   suspiciousActivities Json? @map("suspicious_activities")
 
@@ -1085,9 +1223,9 @@ model Reward {
   year        Int?
 
   /// What earned this reward.
-  criteria     Json?
-  awardedById  String?  @map("awarded_by") @db.Uuid
-  awardedAt    DateTime @default(now()) @map("awarded_at") @db.Timestamptz(6)
+  criteria    Json?
+  awardedById String?  @map("awarded_by") @db.Uuid
+  awardedAt   DateTime @default(now()) @map("awarded_at") @db.Timestamptz(6)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1106,8 +1244,8 @@ model TrainingAssignment {
   sourceDocumentId String? @map("source_document_id") @db.Uuid
   reason           String?
 
-  assignedById String   @map("assigned_by") @db.Uuid
-  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  assignedById String    @map("assigned_by") @db.Uuid
+  assignedAt   DateTime  @default(now()) @map("assigned_at") @db.Timestamptz(6)
   dueDate      DateTime? @map("due_date") @db.Date
 
   status          TrainingStatus @default(assigned)
@@ -1115,9 +1253,9 @@ model TrainingAssignment {
   completionNotes String?        @map("completion_notes")
 
   // Auto-assignment provenance (§18 training recommendations).
-  isAutoAssigned    Boolean? @default(false) @map("is_auto_assigned")
-  triggeringExamId  String?  @map("triggering_exam_id") @db.Uuid
-  triggeringScore   Decimal? @map("triggering_score") @db.Decimal(5, 2)
+  isAutoAssigned   Boolean? @default(false) @map("is_auto_assigned")
+  triggeringExamId String?  @map("triggering_exam_id") @db.Uuid
+  triggeringScore  Decimal? @map("triggering_score") @db.Decimal(5, 2)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1157,8 +1295,8 @@ model SupervisorRemark {
 // ---------------------------------------------------------------------------
 
 model AuditLog {
-  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String? @map("user_id") @db.Uuid
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String? @map("user_id") @db.Uuid
   /// e.g. 'employee.create', 'exam.grade', 'question.approve'
   action     String  @db.VarChar(100)
   entityType String  @map("entity_type") @db.VarChar(50)

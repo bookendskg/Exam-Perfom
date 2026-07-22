@@ -5,7 +5,7 @@ import { validate } from '../http/middleware/validate.js'
 import { authenticatedLimiter, loginLimiter, publicLimiter } from '../http/middleware/rate-limit.js'
 import { ApiError } from '../http/api-error.js'
 import { TokenService } from './token.service.js'
-import { SessionService, type DeviceContext } from './session.service.js'
+import { SessionService, type DeviceContext, type IssuedSession } from './session.service.js'
 import { AuthService } from './auth.service.js'
 import { authenticate, requirePrincipal } from './middleware/authenticate.js'
 import {
@@ -22,7 +22,6 @@ import {
 import { LockoutService } from './lockout.service.js'
 import { LoggingDispatcher, UnconfiguredDispatcher } from '../notifications/dispatcher.js'
 import { setRefreshCookie, clearRefreshCookie, readRefreshToken } from './cookies.js'
-import type { IssuedSession } from './session.service.js'
 
 function deviceFrom(req: Request, deviceInfo?: unknown): DeviceContext {
   return {
@@ -244,5 +243,7 @@ export function buildAuthRouter(deps: Deps) {
     }
   })
 
-  return { router, tokens, sessions, auth, requireAuth }
+  // Only these two are consumed (app.ts). `tokens`, `sessions` and `auth` were
+  // also returned and used by nobody.
+  return { router, requireAuth }
 }
