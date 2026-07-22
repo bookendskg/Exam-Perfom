@@ -73,8 +73,13 @@ export class SessionService {
 
     // Staff superseding above only revoked rows; drop the store entries too so
     // the old access token stops working immediately rather than at its expiry.
+    //
+    // The exemption is essential. This runs AFTER the transaction that created
+    // `session`, and in the Postgres store the "store entry" is the session row
+    // itself — so an unfiltered call revokes the session we are in the middle of
+    // issuing, and the user is 401'd on their first request.
     if (isStaffRole(role)) {
-      await this.store.deleteAllForUser(userId)
+      await this.store.deleteAllForUser(userId, session.id)
     }
 
     const principal = await resolvePrincipal(this.prisma, userId, session.id)
@@ -97,57 +102,132 @@ export class SessionService {
    */
   async refresh(rawToken: string, device: DeviceContext): Promise<IssuedSession> {
     const hash = hashRefreshToken(rawToken)
-
-    const session = await this.prisma.userSession.findFirst({
-      where: { OR: [{ refreshTokenHash: hash }, { previousTokenHash: hash }] },
-      include: { user: true },
-    })
-
-    if (!session) throw ApiError.sessionExpired()
-    if (session.revokedAt) throw ApiError.sessionExpired()
-    if (session.expiresAt <= new Date()) throw ApiError.sessionExpired()
-    if (!session.user.isActive) throw ApiError.sessionExpired()
-
-    // Presented the previous token: only honour it inside the grace window.
-    if (session.previousTokenHash === hash && session.refreshTokenHash !== hash) {
-      const rotatedAt = session.rotatedAt?.getTime() ?? 0
-      if (Date.now() - rotatedAt > ROTATION_GRACE_MS) {
-        // Outside the window this is a replay of a superseded token. Kill the
-        // session rather than serve it.
-        await this.prisma.userSession.update({
-          where: { id: session.id },
-          data: { revokedAt: new Date(), revokedReason: 'token_replay' },
-        })
-        await this.store.delete(session.id)
-        throw ApiError.sessionExpired()
-      }
-    }
-
     const { token: nextToken, hash: nextHash } = this.tokens.mintRefreshToken()
-    await this.prisma.userSession.update({
-      where: { id: session.id },
-      data: {
-        refreshTokenHash: nextHash,
-        previousTokenHash: session.refreshTokenHash,
-        rotatedAt: new Date(),
-        lastSeenAt: new Date(),
-        ipAddress: device.ipAddress ?? session.ipAddress,
-        userAgent: device.userAgent ?? session.userAgent,
-      },
+
+    /**
+     * The whole rotation runs in one transaction under a row lock.
+     *
+     * It used to be a bare `findFirst` followed by an `update` keyed only on
+     * the session id, with nothing tying the write to the token that was read.
+     * Two concurrent refreshes of the same token therefore both succeeded, both
+     * set `previousTokenHash` to the *original* hash, and the loser was handed a
+     * refresh token that was already dead — a silent logout, under exactly the
+     * mobile double-fire the grace window exists to absorb. It also let an
+     * attacker keep the window churning to suppress replay detection.
+     *
+     * `issue()` a few lines above already used the correct pattern; refresh
+     * simply had not been brought in line.
+     */
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM user_sessions
+         WHERE refresh_token_hash = ${hash} OR previous_token_hash = ${hash}
+         FOR UPDATE
+      `
+      if (!locked) return { kind: 'expired' as const }
+
+      const session = await tx.userSession.findUnique({
+        where: { id: locked.id },
+        include: { user: true },
+      })
+      if (!session) return { kind: 'expired' as const }
+
+      const now = new Date()
+      if (session.revokedAt) return { kind: 'expired' as const }
+      if (session.expiresAt <= now) return { kind: 'expired' as const }
+      if (!session.user.isActive) return { kind: 'expired' as const }
+
+      // §7.5's idle window applies here too. Previously refresh ignored it
+      // entirely and unconditionally stamped lastSeenAt, so a session dormant
+      // for days could be resurrected and the idle policy was decorative for
+      // anyone holding a refresh token — including a thief.
+      const idleMs = this.idleTtlFor(session.user.role as Role) * 1000
+      if (now.getTime() - session.lastSeenAt.getTime() > idleMs) {
+        await tx.userSession.update({
+          where: { id: session.id },
+          data: { revokedAt: now, revokedReason: 'idle_timeout' },
+        })
+        return { kind: 'expired' as const }
+      }
+
+      // Presented the previous token: only honour it inside the grace window.
+      if (session.previousTokenHash === hash && session.refreshTokenHash !== hash) {
+        const rotatedAt = session.rotatedAt?.getTime() ?? 0
+        if (Date.now() - rotatedAt > ROTATION_GRACE_MS) {
+          // Outside the window this is a replay of a superseded token. Kill the
+          // session rather than serve it.
+          await tx.userSession.update({
+            where: { id: session.id },
+            data: { revokedAt: now, revokedReason: 'token_replay' },
+          })
+          return { kind: 'replay' as const, sessionId: session.id, userId: session.userId }
+        }
+      }
+
+      await tx.userSession.update({
+        where: { id: session.id },
+        data: {
+          refreshTokenHash: nextHash,
+          previousTokenHash: session.refreshTokenHash,
+          rotatedAt: now,
+          lastSeenAt: now,
+          ipAddress: device.ipAddress ?? session.ipAddress,
+          userAgent: device.userAgent ?? session.userAgent,
+        },
+      })
+
+      return {
+        kind: 'rotated' as const,
+        sessionId: session.id,
+        userId: session.userId,
+        role: session.user.role as Role,
+      }
     })
 
-    const role = session.user.role as Role
-    const principal = await resolvePrincipal(this.prisma, session.userId, session.id)
+    if (outcome.kind === 'replay') {
+      await this.store.delete(outcome.sessionId)
+      // The strongest theft signal the system produces. It was previously
+      // written to `revoked_reason` and never read by anything.
+      await this.recordReplay(outcome.userId, outcome.sessionId)
+      throw ApiError.sessionExpired()
+    }
+    if (outcome.kind === 'expired') throw ApiError.sessionExpired()
+
+    const { sessionId, userId, role } = outcome
+    const principal = await resolvePrincipal(this.prisma, userId, sessionId)
     if (!principal) throw ApiError.sessionExpired()
 
-    await this.store.put(session.id, principal, this.idleTtlFor(role))
-    const accessToken = await this.tokens.signAccessToken({
-      sub: session.userId,
-      role,
-      sid: session.id,
-    })
+    // The role comes from the row just read under lock, so a demotion applies
+    // to the token being minted rather than the one being replaced.
+    await this.store.put(sessionId, principal, this.idleTtlFor(role))
+    const accessToken = await this.tokens.signAccessToken({ sub: userId, role, sid: sessionId })
 
-    return { sessionId: session.id, accessToken, refreshToken: nextToken, principal }
+    return { sessionId, accessToken, refreshToken: nextToken, principal }
+  }
+
+  /**
+   * Records a refresh-token replay.
+   *
+   * Detection already existed; nothing acted on it. A replay outside the grace
+   * window means two parties hold the same token, which is the clearest
+   * evidence of theft the system can produce — it belongs in the audit trail
+   * where someone can see it, not only in a `revoked_reason` column.
+   */
+  private async recordReplay(userId: string, sessionId: string): Promise<void> {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'session.token_replay',
+          entityType: 'user_session',
+          entityId: sessionId,
+        },
+      })
+    } catch {
+      // Never let an audit write failure convert a correctly-refused refresh
+      // into a 500 — the session is already revoked, which is the security
+      // outcome that matters.
+    }
   }
 
   async revoke(sessionId: string, reason = 'logout'): Promise<void> {
@@ -160,21 +240,29 @@ export class SessionService {
 
   /** Ends every session for a user, optionally sparing the caller's own. */
   async revokeAllForUser(userId: string, reason: string, exceptSessionId?: string): Promise<void> {
+    const where = {
+      userId,
+      revokedAt: null,
+      ...(exceptSessionId ? { NOT: { id: exceptSessionId } } : {}),
+    }
+
+    // Collect the ids BEFORE revoking, so the store cleanup targets exactly the
+    // sessions this call ended.
+    //
+    // It previously re-queried afterwards for `revokedAt: { not: null }` — every
+    // session the user had *ever* revoked, unbounded in time — and issued a
+    // no-op write per row. Besides growing without limit, it was wrong for any
+    // cache-backed store: the set it walked was only incidentally related to
+    // what had just been revoked.
+    const ending = await this.prisma.userSession.findMany({ where, select: { id: true } })
+
     await this.prisma.userSession.updateMany({
-      where: {
-        userId,
-        revokedAt: null,
-        ...(exceptSessionId ? { NOT: { id: exceptSessionId } } : {}),
-      },
+      where,
       data: { revokedAt: new Date(), revokedReason: reason },
     })
 
     if (exceptSessionId) {
-      const survivors = await this.prisma.userSession.findMany({
-        where: { userId, revokedAt: { not: null } },
-        select: { id: true },
-      })
-      await Promise.all(survivors.map((s) => this.store.delete(s.id)))
+      await Promise.all(ending.map((s) => this.store.delete(s.id)))
     } else {
       await this.store.deleteAllForUser(userId)
     }

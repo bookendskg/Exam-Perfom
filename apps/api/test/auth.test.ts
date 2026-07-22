@@ -486,23 +486,46 @@ describe('POST /auth/change-password', () => {
     expect(out.body.error.details[0].field).toBe('newPassword')
   })
 
-  it('revokes other sessions but keeps the caller signed in', async () => {
+  /**
+   * Rotates the session rather than sparing the caller's.
+   *
+   * This test previously asserted that the caller's ORIGINAL token still worked
+   * after a password change. That is session fixation: a credential change is a
+   * privilege-change event, and the identifier must not survive it. It also
+   * inverted in the case that matters — if an attacker had phished the password
+   * and was the one holding the "caller" session, the victim changing their
+   * password from elsewhere was the one who got logged out.
+   *
+   * The behaviour asserted now: every prior token dies, and the response hands
+   * the caller a new session so they are not bounced to the login screen.
+   */
+  it('rotates the session, killing every prior token including the caller’s', async () => {
     const { phone, password } = await makeUser({ role: 'admin' })
     const a = await login(phone, password)
     const b = await login(phone, password, { model: 'Redmi 9' })
 
-    await changeAs(a.body.data.accessToken, password, 'BrandNew1').expect(200)
+    const changed = await changeAs(a.body.data.accessToken, password, 'BrandNew1').expect(200)
 
-    // If the password changed because it leaked, the attacker's session must die.
+    // The other device is evicted.
     const other = await request(app)
       .get('/api/v1/auth/me')
       .set('Authorization', `Bearer ${b.body.data.accessToken}`)
     expect(other.status).toBe(401)
 
-    // …but do not bounce the person who just changed it.
-    const self = await request(app)
+    // So is the token that performed the change.
+    const oldSelf = await request(app)
       .get('/api/v1/auth/me')
       .set('Authorization', `Bearer ${a.body.data.accessToken}`)
-    expect(self.status).toBe(200)
+    expect(oldSelf.status).toBe(401)
+
+    // But the caller is handed a working replacement, so the UX is unchanged.
+    const rotated = changed.body.data.accessToken as string
+    expect(rotated).toBeTruthy()
+    expect(rotated).not.toBe(a.body.data.accessToken)
+
+    const newSelf = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${rotated}`)
+    expect(newSelf.status).toBe(200)
   })
 })

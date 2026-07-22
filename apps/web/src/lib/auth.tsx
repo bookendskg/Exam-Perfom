@@ -129,8 +129,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
-      await api.post('/auth/change-password', { currentPassword, newPassword })
+      // The API rotates the session on a credential change (anti session
+      // fixation), so this returns a fresh token and the old one is already
+      // dead. Storing it before the /auth/me call below is not optional — that
+      // call would 401 with the previous token.
+      const { data: rotated } = await api.post<LoginResponse>('/auth/change-password', {
+        currentPassword,
+        newPassword,
+      })
+      tokenStore.set(rotated.accessToken)
       setPasswordChangeRequired(false)
+
       const { data } = await api.get<MeResponse>('/auth/me')
       setUser({
         userId: data.userId,

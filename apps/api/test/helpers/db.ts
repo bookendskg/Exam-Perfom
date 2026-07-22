@@ -25,6 +25,9 @@ export function testDb(): PrismaClient {
  */
 const MUTABLE_TABLES = [
   'user_sessions',
+  // Lockout state is durable now, so it must be reset between tests or a test
+  // that deliberately fails a login leaves the next one locked out.
+  'login_attempts',
   'exam_responses',
   'exam_sessions',
   'exam_assignments',

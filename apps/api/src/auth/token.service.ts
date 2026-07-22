@@ -4,6 +4,16 @@ import type { Role } from '@bookends/core'
 import type { Config } from '../config/env.js'
 import { ApiError } from '../http/api-error.js'
 
+/**
+ * Issuer and audience for access tokens.
+ *
+ * Constants rather than config: they identify *this* API, not a deployment, so
+ * making them environment-dependent would only create a way for staging and
+ * production tokens to be accidentally interchangeable.
+ */
+export const JWT_ISSUER = 'bookends-api'
+export const JWT_AUDIENCE = 'bookends-portal'
+
 export interface AccessTokenClaims {
   sub: string
   role: Role
@@ -31,6 +41,8 @@ export class TokenService {
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject(claims.sub)
       .setIssuedAt()
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
       .setExpirationTime(`${this.config.JWT_ACCESS_TTL_SECONDS}s`)
       .sign(this.secret)
   }
@@ -42,7 +54,18 @@ export class TokenService {
    */
   async verifyAccessToken(token: string): Promise<AccessTokenClaims> {
     try {
-      const { payload } = await jwtVerify(token, this.secret, { algorithms: ['HS256'] })
+      const { payload } = await jwtVerify(token, this.secret, {
+        algorithms: ['HS256'],
+        // Binds the token to this service. Without them, a token minted by any
+        // sibling that happens to share JWT_SECRET — a queue worker, a webhook
+        // signer — would be accepted here as a valid session.
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+        // jose defaults to zero tolerance. Across hosts with drifting clocks
+        // that turns into sporadic, unreproducible 401s; a few seconds costs
+        // nothing against a 15-minute token.
+        clockTolerance: 5,
+      })
 
       const sub = payload.sub
       const role = payload['role']

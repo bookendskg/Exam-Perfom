@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express'
 import { ok } from '@bookends/core'
 import type { Deps } from '../app.js'
 import { validate } from '../http/middleware/validate.js'
-import { loginLimiter, publicLimiter } from '../http/middleware/rate-limit.js'
+import { authenticatedLimiter, loginLimiter, publicLimiter } from '../http/middleware/rate-limit.js'
 import { ApiError } from '../http/api-error.js'
 import { TokenService } from './token.service.js'
 import { SessionService, type DeviceContext } from './session.service.js'
@@ -15,9 +15,11 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
   type LoginInput,
+  type ChangePasswordInput,
   type ForgotPasswordInput,
   type ResetPasswordInput,
 } from './auth.schemas.js'
+import { LockoutService } from './lockout.service.js'
 import { LoggingDispatcher, UnconfiguredDispatcher } from '../notifications/dispatcher.js'
 import { setRefreshCookie, clearRefreshCookie, readRefreshToken } from './cookies.js'
 import type { IssuedSession } from './session.service.js'
@@ -40,7 +42,8 @@ export function buildAuthRouter(deps: Deps) {
   const dispatcher = config.isProduction
     ? new UnconfiguredDispatcher()
     : new LoggingDispatcher(logger)
-  const auth = new AuthService(prisma, sessions, dispatcher)
+  const lockout = new LockoutService(prisma)
+  const auth = new AuthService(prisma, sessions, dispatcher, lockout, logger)
 
   const router = Router()
   const requireAuth = authenticate(tokens, sessionStore, sessions)
@@ -109,13 +112,34 @@ export function buildAuthRouter(deps: Deps) {
   })
 
   // §5.3 POST /api/v1/auth/logout — ends only the calling session.
-  router.post('/logout', requireAuth, (req, res, next) => {
+  router.post('/logout', requireAuth, authenticatedLimiter(30), (req, res, next) => {
     void (async () => {
       try {
         const principal = requirePrincipal(req)
         await sessions.revoke(principal.sessionId, 'logout')
         clearRefreshCookie(res, config)
         res.json(ok({ loggedOut: true }))
+      } catch (err) {
+        next(err)
+      }
+    })()
+  })
+
+  /**
+   * POST /api/v1/auth/logout-all — ends every session this user holds.
+   *
+   * `revokeAllForUser` already existed and was reachable only as a side effect
+   * of changing a password. Someone who believes they are compromised needs a
+   * direct way to evict every other device, without first having to invent a
+   * new password.
+   */
+  router.post('/logout-all', requireAuth, authenticatedLimiter(10), (req, res, next) => {
+    void (async () => {
+      try {
+        const principal = requirePrincipal(req)
+        await sessions.revokeAllForUser(principal.userId, 'user_revoked_all')
+        clearRefreshCookie(res, config)
+        res.json(ok({ loggedOut: true, allDevices: true }))
       } catch (err) {
         next(err)
       }
@@ -130,19 +154,27 @@ export function buildAuthRouter(deps: Deps) {
   router.post(
     '/change-password',
     requireAuth,
+    // The blanket roleLimiter in app.ts is mounted AFTER this router, so it
+    // never reaches these routes — this endpoint had no limiter at all, and it
+    // verifies a password. Limit it explicitly.
+    authenticatedLimiter(),
     validate({ body: changePasswordSchema }),
     (req, res, next) => {
       void (async () => {
         try {
           const principal = requirePrincipal(req)
-          const body = req.valid!.body as { currentPassword: string; newPassword: string }
-          await auth.changePassword(
+          const body = req.valid!.body as ChangePasswordInput
+
+          // Returns a NEW session: the identifier is rotated on a credential
+          // change, so the caller's previous access and refresh tokens are dead
+          // and the client must adopt these.
+          const issued = await auth.changePassword(
             principal.userId,
-            principal.sessionId,
             body.currentPassword,
-            body.newPassword
+            body.newPassword,
+            deviceFrom(req)
           )
-          res.json(ok({ passwordChanged: true }))
+          respondWithSession(res, issued, !req.body?.deviceInfo)
         } catch (err) {
           next(err)
         }
@@ -191,7 +223,9 @@ export function buildAuthRouter(deps: Deps) {
     }
   )
 
-  router.get('/me', requireAuth, (req, res, next) => {
+  // Every call re-resolves the principal (a multi-join read), so an unlimited
+  // /me is free database load for anyone holding a token.
+  router.get('/me', requireAuth, authenticatedLimiter(60), (req, res, next) => {
     try {
       const principal = requirePrincipal(req)
       res.json(
