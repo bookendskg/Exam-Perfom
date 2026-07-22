@@ -233,11 +233,13 @@ export class ExamService {
     // §11.1 step 6: assign everyone matching the target unless told otherwise.
     const assigned =
       input.employeeIds?.length || input.autoAssign !== false
-        ? await this.assignEmployees(exam.id, input.employeeIds, {
-            outletId,
-            departmentId,
-            designationId,
-          })
+        ? await this.assignEmployees(
+            exam.id,
+            input.employeeIds,
+            { outletId, departmentId, designationId },
+            principal,
+            scope
+          )
         : 0
 
     return {
@@ -393,11 +395,17 @@ export class ExamService {
       throw ApiError.conflict(`Cannot assign staff to a ${exam.status} exam`)
     }
 
-    const count = await this.assignEmployees(id, input.employeeIds, {
-      outletId: exam.outletId,
-      departmentId: exam.departmentId,
-      designationId: exam.designationId,
-    })
+    const count = await this.assignEmployees(
+      id,
+      input.employeeIds,
+      {
+        outletId: exam.outletId,
+        departmentId: exam.departmentId,
+        designationId: exam.designationId,
+      },
+      principal,
+      scope
+    )
 
     return { assigned: count }
   }
@@ -406,7 +414,13 @@ export class ExamService {
     await this.getById(principal, scope, id)
 
     return this.prisma.examAssignment.findMany({
-      where: { examId: id },
+      // Scoped on the *candidate*, not only on the exam.
+      //
+      // Checking the exam alone was not enough: a global exam (outletId null)
+      // is readable by every manager, and any assignment rows attached to it —
+      // however they got there — were returned in full, including foreign
+      // employees' names, codes, outlets and results.
+      where: { examId: id, employee: scopeToWhere('employee', scope, principal, 'read') },
       orderBy: { employee: { employeeCode: 'asc' } },
       select: {
         id: true,
@@ -445,7 +459,9 @@ export class ExamService {
       outletId?: string | null
       departmentId?: string | null
       designationId?: string | null
-    }
+    },
+    principal: Principal,
+    scope: Scope
   ): Promise<number> {
     const where: Prisma.EmployeeWhereInput = employeeIds?.length
       ? { id: { in: employeeIds } }
@@ -455,11 +471,28 @@ export class ExamService {
           ...(target.designationId ? { designationId: target.designationId } : {}),
         }
 
+    /**
+     * The caller's own scope, AND-ed — never merged.
+     *
+     * `employeeIds` is caller-supplied and was previously honoured verbatim, so
+     * an outlet_manager could name employees of outlets they do not manage and
+     * write ExamAssignment rows for them: staff in another outlet were notified
+     * of, and required to sit, an exam authored outside their outlet. The same
+     * ids then leaked back through GET /exams/:id/assignments — name, code,
+     * outlet, percentage, grade — and POST /exams/:id/cancel would overwrite
+     * their supervisorRemarks.
+     *
+     * Out-of-scope ids are filtered out rather than rejected: erroring would
+     * confirm which employee ids exist, and the method already silently skips
+     * departed staff, so silence is the consistent behaviour.
+     */
+    const scoped = scopeToWhere('employee', scope, principal, 'write')
+
     const employees = await this.prisma.employee.findMany({
       // §11.3 requires assigned employees be active. Filtering here rather than
       // failing at publish means an explicit id list silently skips a departed
       // employee instead of blocking the whole exam.
-      where: { AND: [where, { employmentStatus: 'active' }] },
+      where: { AND: [where, scoped, { employmentStatus: 'active' }] },
       select: { id: true },
     })
 

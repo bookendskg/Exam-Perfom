@@ -1,6 +1,9 @@
 import type { PrismaClient } from '@bookends/db'
 import { z } from 'zod'
+import type { Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
+import type { Principal } from '../infra/session-store/index.js'
+import { assertInScope, assertCreateInScope } from '../rbac/scope.js'
 
 /**
  * §4.1 source documents — the cookbooks, SOPs and manuals questions are drawn
@@ -101,8 +104,19 @@ export class SourceDocumentService {
     return document
   }
 
-  async create(uploadedById: string, input: CreateSourceDocumentInput) {
+  async create(
+    principal: Principal,
+    scope: Scope,
+    input: CreateSourceDocumentInput
+  ) {
+    // Neither the route nor this method previously saw a scope, so an
+    // outlet_manager holding `own_outlet` could create a document with
+    // outletId: null — a GLOBAL SOP or cookbook visible to every outlet — or
+    // stamp it with any other outlet's id.
+    assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
     await this.assertRefs(input.outletId, input.departmentId)
+
+    const uploadedById = principal.userId
 
     return this.prisma.sourceDocument.create({
       data: {
@@ -119,12 +133,26 @@ export class SourceDocumentService {
     })
   }
 
-  async update(id: string, input: UpdateSourceDocumentInput) {
+  async update(
+    principal: Principal,
+    scope: Scope,
+    id: string,
+    input: UpdateSourceDocumentInput
+  ) {
     const existing = await this.prisma.sourceDocument.findUnique({
       where: { id },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, outletId: true },
     })
     if (!existing) throw ApiError.notFound('Source document not found')
+
+    // Must own the document as it stands…
+    assertInScope(scope, principal, existing, 'write')
+    // …and must not be able to move it out of scope, or to global, by editing
+    // outletId. This mirrors what question.update and template.update already
+    // do, and is the check that stops self-promotion to a global record.
+    if (input.outletId !== undefined) {
+      assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
+    }
 
     await this.assertRefs(input.outletId, input.departmentId)
 

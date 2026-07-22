@@ -12,6 +12,7 @@ import type { SessionStore } from './infra/session-store/index.js'
 import { errorHandler, notFoundHandler } from './http/middleware/error-handler.js'
 import { roleLimiter } from './http/middleware/rate-limit.js'
 import { markPublic } from './rbac/require-permission.js'
+import { PermissionResolver } from './rbac/permission-resolver.js'
 import { requirePasswordChange } from './auth/middleware/require-password-change.js'
 import { buildAuthRouter } from './auth/auth.routes.js'
 import { buildEmployeeRouter } from './employees/employee.routes.js'
@@ -40,8 +41,13 @@ export interface Deps {
  * never binds a port, and main.ts owns the socket.
  */
 export function buildApp(deps: Deps): Application {
-  const { config, logger } = deps
+  const { config, logger, prisma } = deps
   const app = express()
+
+  // §3.2 grants, resolved from the database per request behind a short cache.
+  // Placed on app.locals so requirePermission can reach it without every router
+  // having to thread it through.
+  app.locals.permissions = new PermissionResolver(prisma)
 
   // Behind nginx every request otherwise carries the proxy's IP, which collapses
   // the §5.4 per-IP rate limiter into a single global bucket.

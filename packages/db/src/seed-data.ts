@@ -1,4 +1,5 @@
-import type { PrismaClient } from '@prisma/client'
+import type { PrismaClient, Role, PermissionScope } from '@prisma/client'
+import { PERMISSIONS } from '@bookends/core'
 
 /**
  * §9 organisational reference data.
@@ -50,6 +51,8 @@ export interface SeedCounts {
   departments: number
   designations: number
   mappings: number
+  /** role × permission grants written (§3.2 matrix). */
+  permissions: number
 }
 
 /**
@@ -114,10 +117,54 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<SeedCount
     }
   }
 
+  const permissions = await seedPermissions(prisma)
+
   return {
     outlets: outlets.size,
     departments: departments.size,
     designations: SEED_DESIGNATIONS.length,
     mappings,
+    permissions,
   }
+}
+
+/**
+ * Mirrors the §3.2 matrix from @bookends/core into the database.
+ *
+ * The constant stays the source of truth for what the matrix *should* be — its
+ * `satisfies Record<string, Record<Role, Scope>>` is what makes adding a role a
+ * compile error until every permission accounts for it. This copies that into
+ * the tables the resolver reads at request time, so day-one behaviour is
+ * identical and grants become editable data afterwards.
+ *
+ * Upsert, not insert: re-running must converge rather than duplicate, and a
+ * scope edited in the database is deliberately reset to the code default when
+ * the seed is re-run. Anything else and "what does the seed do to my
+ * customisations" has no answer.
+ */
+export async function seedPermissions(prisma: PrismaClient): Promise<number> {
+  let grants = 0
+
+  for (const [key, roleScopes] of Object.entries(PERMISSIONS)) {
+    const permission = await prisma.permission.upsert({
+      where: { key },
+      update: {},
+      create: { key },
+    })
+
+    for (const [role, scope] of Object.entries(roleScopes)) {
+      await prisma.rolePermission.upsert({
+        where: { role_permissionId: { role: role as Role, permissionId: permission.id } },
+        update: { scope: scope as PermissionScope },
+        create: {
+          role: role as Role,
+          permissionId: permission.id,
+          scope: scope as PermissionScope,
+        },
+      })
+      grants += 1
+    }
+  }
+
+  return grants
 }

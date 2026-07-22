@@ -1,6 +1,7 @@
 import type { RequestHandler } from 'express'
-import { permissionScope, type Permission, type Scope } from '@bookends/core'
+import type { Permission, Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
+import type { PermissionResolver } from './permission-resolver.js'
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -19,31 +20,53 @@ declare module 'express-serve-static-core' {
  */
 export function requirePermission(permission: Permission): RequestHandler {
   const handler: RequestHandler = (req, _res, next) => {
-    if (!req.principal) {
-      next(ApiError.unauthenticated())
-      return
-    }
+    void (async () => {
+      try {
+        if (!req.principal) {
+          next(ApiError.unauthenticated())
+          return
+        }
 
-    const scope = permissionScope(req.principal.role, permission)
-    if (scope === 'none') {
-      next(ApiError.forbidden())
-      return
-    }
+        /**
+         * Grants come from the database, via a resolver put on `app.locals` by
+         * buildApp.
+         *
+         * Read from the app rather than injected through every router so that
+         * ~40 existing route definitions did not have to change; the trade is
+         * that it must be present. Absent, this throws rather than falling back
+         * to the compiled matrix — a silent fallback would mean an unseeded or
+         * misconfigured deployment quietly enforcing a *different* matrix from
+         * the one in the database, which is far worse than failing loudly.
+         */
+        const resolver = req.app.locals.permissions as PermissionResolver | undefined
+        if (!resolver) {
+          throw new Error('PermissionResolver is not configured on app.locals.permissions')
+        }
 
-    // An outlet_manager with no managed outlet has an empty scope. Every scoped
-    // query would return nothing, which reads as a broken account rather than a
-    // permission problem — so say so plainly.
-    if (scope === 'own_outlet' && req.principal.managedOutletIds.length === 0) {
-      next(
-        ApiError.forbidden(
-          'Your account is not assigned to manage any outlet. Contact an administrator.'
-        )
-      )
-      return
-    }
+        const scope = await resolver.scopeFor(req.principal.role, permission)
+        if (scope === 'none') {
+          next(ApiError.forbidden())
+          return
+        }
 
-    req.scope = scope
-    next()
+        // An outlet_manager with no managed outlet has an empty scope. Every
+        // scoped query would return nothing, which reads as a broken account
+        // rather than a permission problem — so say so plainly.
+        if (scope === 'own_outlet' && req.principal.managedOutletIds.length === 0) {
+          next(
+            ApiError.forbidden(
+              'Your account is not assigned to manage any outlet. Contact an administrator.'
+            )
+          )
+          return
+        }
+
+        req.scope = scope
+        next()
+      } catch (err) {
+        next(err)
+      }
+    })()
   }
 
   // Tagged so the router coverage guard can see this route is gated.

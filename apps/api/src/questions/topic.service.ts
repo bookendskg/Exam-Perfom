@@ -1,6 +1,9 @@
 import type { PrismaClient } from '@bookends/db'
 import { z } from 'zod'
+import type { Scope } from '@bookends/core'
 import { ApiError } from '../http/api-error.js'
+import type { Principal } from '../infra/session-store/index.js'
+import { assertInScope, assertCreateInScope } from '../rbac/scope.js'
 
 /** §4.1 topics — a tree, scoped to a department, trilingual (§6.2). */
 
@@ -11,6 +14,9 @@ export const createTopicSchema = z.object({
   sourceDocumentId: z.string().uuid().optional(),
   parentTopicId: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
+  /** Omit for a topic that applies to every outlet. An outlet_manager must
+   *  supply one they manage — assertCreateInScope enforces that. */
+  outletId: z.string().uuid().nullable().optional(),
   sortOrder: z.coerce.number().int().min(0).max(32767).optional(),
 })
 
@@ -45,6 +51,7 @@ const TOPIC_SELECT = {
   sourceDocumentId: true,
   parentTopicId: true,
   departmentId: true,
+  outletId: true,
   sortOrder: true,
   isActive: true,
 }
@@ -73,7 +80,12 @@ export class TopicService {
     return query.tree ? buildTree(topics) : topics
   }
 
-  async create(input: CreateTopicInput) {
+  async create(principal: Principal, scope: Scope, input: CreateTopicInput) {
+    // The §3.2 matrix grants outlet_manager `own_outlet` here. Until Topic had
+    // an outlet column that was unenforceable, and the delivered behaviour was
+    // `all` — any manager could reshape the entire taxonomy.
+    assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
+
     if (input.parentTopicId) await this.assertTopicExists(input.parentTopicId, 'parentTopicId')
     if (input.departmentId) await this.assertDepartmentExists(input.departmentId)
     if (input.sourceDocumentId) await this.assertDocumentExists(input.sourceDocumentId)
@@ -86,18 +98,25 @@ export class TopicService {
         sourceDocumentId: input.sourceDocumentId ?? null,
         parentTopicId: input.parentTopicId ?? null,
         departmentId: input.departmentId ?? null,
+        outletId: input.outletId ?? null,
         sortOrder: input.sortOrder ?? 0,
       },
       select: TOPIC_SELECT,
     })
   }
 
-  async update(id: string, input: UpdateTopicInput) {
+  async update(principal: Principal, scope: Scope, id: string, input: UpdateTopicInput) {
     const existing = await this.prisma.topic.findUnique({
       where: { id },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, outletId: true },
     })
     if (!existing) throw ApiError.notFound('Topic not found')
+
+    // Own it as it stands, and cannot move it to global or to another outlet.
+    assertInScope(scope, principal, existing, 'write')
+    if (input.outletId !== undefined) {
+      assertCreateInScope(scope, principal, { outletId: input.outletId ?? null })
+    }
 
     if (input.parentTopicId) {
       await this.assertTopicExists(input.parentTopicId, 'parentTopicId')

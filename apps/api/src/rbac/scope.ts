@@ -6,7 +6,13 @@ import { ApiError } from '../http/api-error.js'
  * Entities that carry outlet scoping. Each resolves `own_resource` differently:
  * an employee's own record is keyed by userId, a question's by who created it.
  */
-export type ScopedEntity = 'employee' | 'question' | 'exam' | 'exam_template' | 'source_document'
+export type ScopedEntity =
+  | 'employee'
+  | 'question'
+  | 'exam'
+  | 'exam_template'
+  | 'source_document'
+  | 'topic'
 
 /**
  * Read and write scope are NOT the same, and conflating them is a data
@@ -29,6 +35,10 @@ const OWN_RESOURCE_KEY: Record<ScopedEntity, string> = {
   exam: 'createdById',
   exam_template: 'createdById',
   source_document: 'uploadedById',
+  // Topic has no creator column; no role holds own_resource on topic:manage, so
+  // this is unreachable. Pointed at a column that cannot match rather than left
+  // absent, so a future matrix change fails closed instead of widening.
+  topic: 'id',
 }
 
 /**

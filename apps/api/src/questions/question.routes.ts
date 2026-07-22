@@ -301,7 +301,17 @@ export function buildQuestionRouters(deps: Deps) {
     (req, res, next) => {
       void (async () => {
         try {
-          res.status(201).json(ok(await topics.create(req.valid!.body as CreateTopicInput)))
+          res
+            .status(201)
+            .json(
+              ok(
+                await topics.create(
+                  requirePrincipal(req),
+                  scopeOf(req),
+                  req.valid!.body as CreateTopicInput
+                )
+              )
+            )
         } catch (err) {
           next(err)
         }
@@ -317,7 +327,16 @@ export function buildQuestionRouters(deps: Deps) {
       void (async () => {
         try {
           const { id } = req.valid!.params as { id: string }
-          res.json(ok(await topics.update(id, req.valid!.body as UpdateTopicInput)))
+          res.json(
+            ok(
+              await topics.update(
+                requirePrincipal(req),
+                scopeOf(req),
+                id,
+                req.valid!.body as UpdateTopicInput
+              )
+            )
+          )
         } catch (err) {
           next(err)
         }
@@ -355,7 +374,8 @@ export function buildQuestionRouters(deps: Deps) {
             .json(
               ok(
                 await documents.create(
-                  principal.userId,
+                  principal,
+                  scopeOf(req),
                   req.valid!.body as CreateSourceDocumentInput
                 )
               )
@@ -391,7 +411,16 @@ export function buildQuestionRouters(deps: Deps) {
       void (async () => {
         try {
           const { id } = req.valid!.params as { id: string }
-          res.json(ok(await documents.update(id, req.valid!.body as UpdateSourceDocumentInput)))
+          res.json(
+            ok(
+              await documents.update(
+                requirePrincipal(req),
+                scopeOf(req),
+                id,
+                req.valid!.body as UpdateSourceDocumentInput
+              )
+            )
+          )
         } catch (err) {
           next(err)
         }
