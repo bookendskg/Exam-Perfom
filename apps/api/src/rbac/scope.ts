@@ -7,12 +7,7 @@ import { ApiError } from '../http/api-error.js'
  * an employee's own record is keyed by userId, a question's by who created it.
  */
 export type ScopedEntity =
-  | 'employee'
-  | 'question'
-  | 'exam'
-  | 'exam_template'
-  | 'source_document'
-  | 'topic'
+  'employee' | 'question' | 'exam' | 'exam_template' | 'source_document' | 'topic'
 
 /**
  * Read and write scope are NOT the same, and conflating them is a data

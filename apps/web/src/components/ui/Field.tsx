@@ -1,5 +1,10 @@
 import { createContext, useContext, useId } from 'react'
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from 'react'
 import { cn } from '../../lib/cn'
 
 /**
@@ -57,7 +62,10 @@ export function Field({
       }}
     >
       <div className="block">
-        <label htmlFor={controlId} className="mb-1.5 block text-body-sm font-medium text-on-surface">
+        <label
+          htmlFor={controlId}
+          className="mb-1.5 block text-body-sm font-medium text-on-surface"
+        >
           {label}
           {required && (
             <>
@@ -97,7 +105,13 @@ const controlClasses = cn(
 )
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...useFieldProps()} {...props} className={cn(controlClasses, 'h-10 px-3 text-body-sm', className)} />
+  return (
+    <input
+      {...useFieldProps()}
+      {...props}
+      className={cn(controlClasses, 'h-10 px-3 text-body-sm', className)}
+    />
+  )
 }
 
 export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {

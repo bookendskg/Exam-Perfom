@@ -83,10 +83,17 @@ async function clear() {
   // Leaf-first, mirroring the FK graph: responses and sessions hang off
   // assignments, assignments off exams and employees.
   await prisma.examResponse.deleteMany({
-    where: { OR: [{ examAssignment: { examId: { in: examIds } } }, { examAssignment: { employeeId: { in: employeeIds } } }] },
+    where: {
+      OR: [
+        { examAssignment: { examId: { in: examIds } } },
+        { examAssignment: { employeeId: { in: employeeIds } } },
+      ],
+    },
   })
   await prisma.examSession.deleteMany({
-    where: { examAssignment: { OR: [{ examId: { in: examIds } }, { employeeId: { in: employeeIds } }] } },
+    where: {
+      examAssignment: { OR: [{ examId: { in: examIds } }, { employeeId: { in: employeeIds } }] },
+    },
   })
   await prisma.examAssignment.deleteMany({
     where: { OR: [{ examId: { in: examIds } }, { employeeId: { in: employeeIds } }] },
@@ -184,12 +191,18 @@ async function create() {
     })
     employees.push(employee)
   }
-  console.log(`  ${employees.length} staff across ${new Set(STAFF.map((s) => s.outlet)).size} outlets`)
+  console.log(
+    `  ${employees.length} staff across ${new Set(STAFF.map((s) => s.outlet)).size} outlets`
+  )
 
   console.log('Creating questions…')
   const kitchen = deptBy('KIT')
   const topic = await prisma.topic.upsert({
-    where: { id: (await prisma.topic.findFirst({ where: { nameEn: 'Food Safety' } }))?.id ?? '00000000-0000-0000-0000-000000000000' },
+    where: {
+      id:
+        (await prisma.topic.findFirst({ where: { nameEn: 'Food Safety' } }))?.id ??
+        '00000000-0000-0000-0000-000000000000',
+    },
     update: {},
     create: { nameEn: 'Food Safety', nameHi: 'खाद्य सुरक्षा', departmentId: kitchen.id },
   })
@@ -270,7 +283,9 @@ async function create() {
   console.log('Creating an exam…')
   const totalMarks = questions.reduce((sum, q) => sum + Number(q.marks), 0)
   const today = new Date()
-  const scheduled = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
+  const scheduled = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  )
 
   const exam = await prisma.exam.create({
     data: {
@@ -291,7 +306,11 @@ async function create() {
       status: 'scheduled',
       createdById: author.id,
       examQuestions: {
-        create: questions.map((q, i) => ({ questionId: q.id, sortOrder: i, marks: Number(q.marks) })),
+        create: questions.map((q, i) => ({
+          questionId: q.id,
+          sortOrder: i,
+          marks: Number(q.marks),
+        })),
       },
     },
     include: { examQuestions: { orderBy: { sortOrder: 'asc' } } },

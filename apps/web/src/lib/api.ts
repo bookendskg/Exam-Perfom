@@ -78,7 +78,11 @@ export interface Result<T> {
 
 export async function request<T>(
   path: string,
-  options: { method?: string; body?: unknown; query?: Record<string, string | number | undefined> } = {}
+  options: {
+    method?: string
+    body?: unknown
+    query?: Record<string, string | number | undefined>
+  } = {}
 ): Promise<Result<T>> {
   const url = new URL(`/api/v1${path}`, window.location.origin)
   for (const [key, value] of Object.entries(options.query ?? {})) {

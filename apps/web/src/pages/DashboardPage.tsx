@@ -75,10 +75,7 @@ export function DashboardPage() {
 
   return (
     <>
-      <PageHeader
-        title="Dashboard"
-        subtitle="Bookends Hospitality — Aiko, Capiche and Prep"
-      />
+      <PageHeader title="Dashboard" subtitle="Bookends Hospitality — Aiko, Capiche and Prep" />
 
       <div className="mb-8 grid gap-4 sm:grid-cols-3">
         <Stat label="Outlets" value={outlets.data?.length ?? '—'} />

@@ -51,7 +51,10 @@ export function useApi<T>(
         if (cancelled) return
         // A 401 or a pending password change is already being handled globally;
         // showing a red box on top of the redirect would just be noise.
-        if (err instanceof ApiError && (err.status === 401 || err.code === 'PASSWORD_CHANGE_REQUIRED')) {
+        if (
+          err instanceof ApiError &&
+          (err.status === 401 || err.code === 'PASSWORD_CHANGE_REQUIRED')
+        ) {
           return
         }
         setError(err instanceof Error ? err.message : 'Something went wrong')

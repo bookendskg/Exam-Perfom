@@ -42,7 +42,10 @@ export function ExamsPage() {
 
   return (
     <>
-      <PageHeader title="Exams" subtitle="§11 — scheduled monthly, on the 15th unless it falls on a weekend" />
+      <PageHeader
+        title="Exams"
+        subtitle="§11 — scheduled monthly, on the 15th unless it falls on a weekend"
+      />
 
       <Card className="mb-4 p-4">
         <label className="text-sm">
@@ -66,10 +69,25 @@ export function ExamsPage() {
       </Card>
 
       <Card>
-        <Async state={exams} empty="No exams yet. The scheduler creates them on the 1st of each month.">
+        <Async
+          state={exams}
+          empty="No exams yet. The scheduler creates them on the 1st of each month."
+        >
           {(rows) => (
             <>
-              <Table head={['Code', 'Exam', 'Window', 'Marks', 'Assigned', 'Sat', 'Passed', 'Average', 'Status']}>
+              <Table
+                head={[
+                  'Code',
+                  'Exam',
+                  'Window',
+                  'Marks',
+                  'Assigned',
+                  'Sat',
+                  'Passed',
+                  'Average',
+                  'Status',
+                ]}
+              >
                 {rows.map((x) => (
                   <tr key={x.id} className="hover:bg-stone-50">
                     <td className="px-4 py-3 font-mono text-xs text-stone-500">{x.examCode}</td>
@@ -77,7 +95,10 @@ export function ExamsPage() {
                     <td className="px-4 py-3 text-xs text-stone-600">{windowOf(x)}</td>
                     <td className="px-4 py-3 text-stone-600">
                       {Number(x.totalMarks)}
-                      <span className="text-xs text-stone-400"> · pass {Number(x.passingPercentage)}%</span>
+                      <span className="text-xs text-stone-400">
+                        {' '}
+                        · pass {Number(x.passingPercentage)}%
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-stone-600">{x.totalAssigned ?? 0}</td>
                     <td className="px-4 py-3 text-stone-600">{x.totalAttempted ?? 0}</td>
@@ -98,7 +119,11 @@ export function ExamsPage() {
                 <div className="flex items-center justify-between border-t border-stone-200 px-4 py-3 text-sm">
                   <span className="text-stone-500">{exams.meta.total} exams</span>
                   <div className="flex gap-2">
-                    <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                    <Button
+                      variant="secondary"
+                      disabled={page <= 1}
+                      onClick={() => setPage((p) => p - 1)}
+                    >
                       Previous
                     </Button>
                     <Button

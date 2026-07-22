@@ -58,10 +58,13 @@ const IMPLEMENTATIONS: Array<{ name: string; make: () => Fixture }> = [
     name: 'MemorySessionStore',
     make: () => {
       let offset = 0
-      const store = new MemorySessionStore(async (sessionId) => {
-        const resolved = await resolveSessionPrincipal(prisma, sessionId)
-        return resolved?.principal ?? null
-      }, () => Date.now() + offset)
+      const store = new MemorySessionStore(
+        async (sessionId) => {
+          const resolved = await resolveSessionPrincipal(prisma, sessionId)
+          return resolved?.principal ?? null
+        },
+        () => Date.now() + offset
+      )
       return {
         store,
         // A real session row, same as the Postgres fixture. The memory store

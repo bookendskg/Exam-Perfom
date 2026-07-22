@@ -61,7 +61,9 @@ export function Alert({
       <Icon aria-hidden="true" className={cn('mt-0.5 h-5 w-5 shrink-0', ICON_TONES[tone])} />
       <div className="min-w-0 flex-1">
         {title && <p className="font-semibold">{title}</p>}
-        {children && <div className={cn(title && 'mt-1', 'text-on-surface-variant')}>{children}</div>}
+        {children && (
+          <div className={cn(title && 'mt-1', 'text-on-surface-variant')}>{children}</div>
+        )}
       </div>
     </div>
   )

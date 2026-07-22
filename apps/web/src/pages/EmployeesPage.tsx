@@ -36,13 +36,18 @@ export function EmployeesPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
 
-  const employees = useApi<Employee[]>('/employees', { page, limit: 20, search: search || undefined })
+  const employees = useApi<Employee[]>('/employees', {
+    page,
+    limit: 20,
+    search: search || undefined,
+  })
   const outlets = useApi<NamedRef[]>('/outlets')
   const departments = useApi<NamedRef[]>('/departments')
 
   // Ids are resolved to names client-side because the list endpoint returns
   // foreign keys rather than nested objects, and the reference lists are tiny.
-  const nameOf = (list: NamedRef[] | null, id: string) => list?.find((r) => r.id === id)?.name ?? '—'
+  const nameOf = (list: NamedRef[] | null, id: string) =>
+    list?.find((r) => r.id === id)?.name ?? '—'
 
   return (
     <>
@@ -61,7 +66,10 @@ export function EmployeesPage() {
       </Card>
 
       <Card>
-        <Async state={employees} empty="No employees yet. Add them through the API or a bulk import.">
+        <Async
+          state={employees}
+          empty="No employees yet. Add them through the API or a bulk import."
+        >
           {(rows) => (
             <>
               <Table head={['Code', 'Name', 'Phone', 'Outlet', 'Department', 'Status']}>
@@ -90,8 +98,8 @@ export function EmployeesPage() {
               {employees.meta && employees.meta.totalPages > 1 && (
                 <div className="flex items-center justify-between border-t border-stone-200 px-4 py-3 text-sm">
                   <span className="text-stone-500">
-                    Page {employees.meta.page} of {employees.meta.totalPages} · {employees.meta.total}{' '}
-                    total
+                    Page {employees.meta.page} of {employees.meta.totalPages} ·{' '}
+                    {employees.meta.total} total
                   </span>
                   <div className="flex gap-2">
                     <Button

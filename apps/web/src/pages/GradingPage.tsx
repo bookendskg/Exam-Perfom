@@ -44,10 +44,7 @@ export function GradingPage() {
       />
 
       <Card>
-        <Async
-          state={queue}
-          empty="Nothing to grade. Every submitted answer has been marked."
-        >
+        <Async state={queue} empty="Nothing to grade. Every submitted answer has been marked.">
           {(rows) => (
             <Table head={['Staff', 'Outlet', 'Exam', 'Submitted', 'Waiting', 'To mark', '']}>
               {rows.map((row) => (

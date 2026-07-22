@@ -26,7 +26,8 @@ afterAll(async () => {
 /* -------------------------------------------------------------------------- */
 
 describe('POST /auth/forgot-password — account enumeration', () => {
-  const forgot = (phone: string) => request(app).post('/api/v1/auth/forgot-password').send({ phone })
+  const forgot = (phone: string) =>
+    request(app).post('/api/v1/auth/forgot-password').send({ phone })
 
   it('answers identically for a real, an unknown, and a deactivated number', async () => {
     const real = await makeUser({ role: 'staff' })

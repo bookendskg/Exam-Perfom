@@ -74,11 +74,7 @@ export function Button({
       aria-busy={loading || undefined}
       className={buttonClasses(variant, size, className)}
     >
-      {loading ? (
-        <Loader2 aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin" />
-      ) : (
-        icon
-      )}
+      {loading ? <Loader2 aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin" /> : icon}
       {children}
     </button>
   )

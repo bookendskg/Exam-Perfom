@@ -104,11 +104,7 @@ export class SourceDocumentService {
     return document
   }
 
-  async create(
-    principal: Principal,
-    scope: Scope,
-    input: CreateSourceDocumentInput
-  ) {
+  async create(principal: Principal, scope: Scope, input: CreateSourceDocumentInput) {
     // Neither the route nor this method previously saw a scope, so an
     // outlet_manager holding `own_outlet` could create a document with
     // outletId: null — a GLOBAL SOP or cookbook visible to every outlet — or
@@ -133,12 +129,7 @@ export class SourceDocumentService {
     })
   }
 
-  async update(
-    principal: Principal,
-    scope: Scope,
-    id: string,
-    input: UpdateSourceDocumentInput
-  ) {
+  async update(principal: Principal, scope: Scope, id: string, input: UpdateSourceDocumentInput) {
     const existing = await this.prisma.sourceDocument.findUnique({
       where: { id },
       select: { id: true, isActive: true, outletId: true },

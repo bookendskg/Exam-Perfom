@@ -120,7 +120,9 @@ export function Stat({
 
   return (
     <Card className="relative overflow-hidden">
-      {tone && <span aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-1', accent[tone])} />}
+      {tone && (
+        <span aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-1', accent[tone])} />
+      )}
       <div className="p-5">
         <div className="flex items-start justify-between gap-3">
           <p className="text-label-caps uppercase text-on-surface-variant">{label}</p>

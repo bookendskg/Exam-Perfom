@@ -95,7 +95,7 @@ const schema = z
         path: ['JWT_SECRET'],
         message:
           'JWT_SECRET must be set and at least 32 characters. Generate one with:\n' +
-          '    node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"',
+          "    node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"",
       })
     }
 

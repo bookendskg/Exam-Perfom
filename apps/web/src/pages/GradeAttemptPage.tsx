@@ -85,7 +85,9 @@ function TheoryCard({
       <div className="mb-3 flex items-start justify-between gap-4">
         <h3 className="font-medium text-stone-900">{response.question.questionTextEn}</h3>
         <Badge tone={response.marksObtained == null ? 'warn' : 'good'}>
-          {response.marksObtained == null ? 'Not marked' : `${Number(response.marksObtained)} / ${max}`}
+          {response.marksObtained == null
+            ? 'Not marked'
+            : `${Number(response.marksObtained)} / ${max}`}
         </Badge>
       </div>
 
@@ -194,7 +196,9 @@ function RubricCard({
       <div className="mb-3 flex items-start justify-between gap-4">
         <h3 className="font-medium text-stone-900">{response.question.questionTextEn}</h3>
         <Badge tone={response.marksObtained == null ? 'warn' : 'good'}>
-          {response.marksObtained == null ? 'Not marked' : `${Number(response.marksObtained)} / ${max}`}
+          {response.marksObtained == null
+            ? 'Not marked'
+            : `${Number(response.marksObtained)} / ${max}`}
         </Badge>
       </div>
 

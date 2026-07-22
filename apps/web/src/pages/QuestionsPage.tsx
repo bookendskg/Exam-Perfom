@@ -121,7 +121,9 @@ export function QuestionsPage() {
         <Async state={questions} empty="No questions match this filter.">
           {(rows) => (
             <>
-              <Table head={['Question', 'Type', 'Difficulty', 'Marks', 'Languages', 'Used', 'Status']}>
+              <Table
+                head={['Question', 'Type', 'Difficulty', 'Marks', 'Languages', 'Used', 'Status']}
+              >
                 {rows.map((q) => (
                   <tr key={q.id} className="hover:bg-stone-50">
                     <td className="max-w-md px-4 py-3">
@@ -148,11 +150,13 @@ export function QuestionsPage() {
 
               {questions.meta && questions.meta.totalPages > 1 && (
                 <div className="flex items-center justify-between border-t border-stone-200 px-4 py-3 text-sm">
-                  <span className="text-stone-500">
-                    {questions.meta.total} questions
-                  </span>
+                  <span className="text-stone-500">{questions.meta.total} questions</span>
                   <div className="flex gap-2">
-                    <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                    <Button
+                      variant="secondary"
+                      disabled={page <= 1}
+                      onClick={() => setPage((p) => p - 1)}
+                    >
                       Previous
                     </Button>
                     <Button

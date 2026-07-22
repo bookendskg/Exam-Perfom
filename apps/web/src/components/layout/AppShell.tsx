@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import {
-  ClipboardCheck,
-  FileQuestion,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  Users,
-  X,
-} from 'lucide-react'
+import { ClipboardCheck, FileQuestion, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react'
 import { allowed, useAuth, type Role } from '../../lib/auth'
 import { cn } from '../../lib/cn'
 import { ThemeToggle } from './ThemeToggle'
@@ -85,7 +77,11 @@ function NavItems({ role, onNavigate }: { role: Role | undefined; onNavigate?: (
         >
           {({ isActive }) => (
             <>
-              <Icon aria-hidden="true" className="h-5 w-5 shrink-0" strokeWidth={isActive ? 2.4 : 2} />
+              <Icon
+                aria-hidden="true"
+                className="h-5 w-5 shrink-0"
+                strokeWidth={isActive ? 2.4 : 2}
+              />
               <span className="truncate">{label}</span>
             </>
           )}
