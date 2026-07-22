@@ -3,7 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Bookends Hospitality staff performance and examination portal." />
+    <meta name="color-scheme" content="light dark" />
     <title>Bookends — Staff Performance Portal</title>
+
+    <!--
+      Theme, applied before the first paint.
+
+      This has to be a blocking inline script rather than React state: if the
+      class were set in an effect, the browser would paint the light theme first
+      and a dark-mode user would see a white flash on every page load. Reading
+      localStorage synchronously here costs under a millisecond and removes it.
+
+      Kept deliberately dependency-free and wrapped in try/catch — localStorage
+      throws in private-browsing modes on some browsers, and a theme preference
+      is never worth breaking the whole app over.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('bookends.theme')
+          var isDark =
+            stored === 'dark' ||
+            ((stored === 'system' || !stored) &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', isDark)
+          document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
+        } catch (e) {
+          /* no stored preference reachable — fall through to the light default */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

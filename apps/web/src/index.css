@@ -2,11 +2,165 @@
 @tailwind components;
 @tailwind utilities;
 
+/**
+ * Design tokens.
+ *
+ * Values are bare HSL channels, not finished colours, so Tailwind can apply
+ * opacity modifiers (`bg-primary/10`). See tailwind.config.js for the mapping
+ * from these variables to utility class names.
+ *
+ * Dark mode is driven by a `.dark` class on <html>, set before first paint by
+ * the inline script in index.html — see there for why.
+ */
 @layer base {
+  :root {
+    /* --- Brand ramp -----------------------------------------------------
+     * Bookends primary blue. The whole visual identity hangs off these ten
+     * values; to re-hue the app, change only this block. */
+    --brand-50: 214 100% 97%;
+    --brand-100: 214 95% 93%;
+    --brand-200: 213 97% 87%;
+    --brand-300: 212 96% 78%;
+    --brand-400: 213 94% 68%;
+    --brand-500: 217 91% 60%;
+    --brand-600: 221 83% 53%;
+    --brand-700: 224 76% 45%;
+    --brand-800: 226 71% 36%;
+    --brand-900: 224 64% 30%;
+
+    /* --- Surfaces -------------------------------------------------------
+     * A tonal ladder. Higher container = closer to the viewer. Neutrals carry
+     * a slight blue cast so they sit with the brand rather than fighting it. */
+    --surface: 210 20% 99%;
+    --surface-dim: 214 16% 93%;
+    --surface-bright: 0 0% 100%;
+    --surface-container-lowest: 0 0% 100%;
+    --surface-container-low: 210 20% 98%;
+    --surface-container: 214 18% 96%;
+    --surface-container-high: 214 16% 93%;
+    --surface-container-highest: 214 15% 90%;
+    --inverse-surface: 215 28% 15%;
+    --inverse-on-surface: 210 20% 96%;
+
+    --on-surface: 215 30% 12%;
+    --on-surface-variant: 215 16% 42%;
+
+    --outline: 215 14% 62%;
+    --outline-variant: 214 20% 88%;
+
+    /* --- Semantic roles ------------------------------------------------- */
+    --primary: 221 83% 53%;
+    --on-primary: 0 0% 100%;
+    --primary-container: 214 95% 93%;
+    --on-primary-container: 226 71% 33%;
+
+    --secondary: 215 20% 42%;
+    --on-secondary: 0 0% 100%;
+    --secondary-container: 214 22% 93%;
+    --on-secondary-container: 215 30% 24%;
+
+    --success: 142 69% 32%;
+    --success-container: 141 70% 92%;
+    --warning: 32 90% 40%;
+    --warning-container: 45 93% 90%;
+    --danger: 0 70% 46%;
+    --danger-container: 0 86% 95%;
+    --info: 200 88% 40%;
+    --info-container: 201 90% 92%;
+
+    /* --- Outlets --------------------------------------------------------
+     * Aiko, Capiche and Prep — the group's three restaurants. */
+    --outlet-aiko: 43 92% 46%;
+    --outlet-capiche: 0 72% 48%;
+    --outlet-prep: 172 62% 36%;
+
+    --ring: 221 83% 53%;
+    --shadow: 215 40% 20%;
+  }
+
+  .dark {
+    /* Surfaces invert into a near-black blue. Kept off pure #000 so elevation
+     * remains visible and OLED smearing is avoided. */
+    --surface: 220 22% 9%;
+    --surface-dim: 222 24% 7%;
+    --surface-bright: 220 16% 20%;
+    --surface-container-lowest: 222 26% 6%;
+    --surface-container-low: 220 21% 11%;
+    --surface-container: 220 19% 13%;
+    --surface-container-high: 219 17% 17%;
+    --surface-container-highest: 218 15% 21%;
+    --inverse-surface: 210 20% 92%;
+    --inverse-on-surface: 215 30% 14%;
+
+    --on-surface: 210 20% 96%;
+    --on-surface-variant: 215 16% 72%;
+
+    --outline: 215 12% 50%;
+    --outline-variant: 217 16% 26%;
+
+    /* Primary lightens in dark mode: the light-theme 600 fails contrast on a
+     * dark surface. Its "on" colour darkens to match. */
+    --primary: 213 94% 72%;
+    --on-primary: 226 71% 16%;
+    --primary-container: 226 60% 28%;
+    --on-primary-container: 214 95% 91%;
+
+    --secondary: 215 18% 68%;
+    --on-secondary: 215 30% 16%;
+    --secondary-container: 217 17% 24%;
+    --on-secondary-container: 214 22% 90%;
+
+    --success: 142 62% 55%;
+    --success-container: 143 45% 18%;
+    --warning: 40 92% 60%;
+    --warning-container: 33 60% 18%;
+    --danger: 0 84% 70%;
+    --danger-container: 0 50% 22%;
+    --info: 200 90% 62%;
+    --info-container: 201 55% 20%;
+
+    --outlet-aiko: 43 90% 60%;
+    --outlet-capiche: 0 80% 65%;
+    --outlet-prep: 172 55% 50%;
+
+    --ring: 213 94% 72%;
+    --shadow: 220 40% 2%;
+  }
+
+  html {
+    /* Anchors and skip-links land below the sticky header rather than under it. */
+    scroll-padding-top: 5rem;
+  }
+
   body {
-    @apply bg-stone-50 text-stone-900 antialiased;
-    font-family:
-      ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Devanagari',
-      'Noto Sans Gujarati', sans-serif;
+    @apply bg-surface text-on-surface antialiased;
+  }
+
+  /* One consistent focus ring everywhere, and only for keyboard users. Mouse
+   * clicks do not draw it; Tab does. This is the single biggest accessibility
+   * win in the app, which previously relied on the UA default. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-surface;
+  }
+
+  /* Honour the OS "reduce motion" setting. Animation is decoration here — no
+   * information is conveyed by movement alone, so it is safe to remove. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Visible only once focused — the first Tab stop on every page. */
+  .skip-link {
+    @apply sr-only rounded-md bg-primary px-4 py-2 text-on-primary;
+    @apply focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50;
   }
 }
