@@ -74,10 +74,10 @@ npm run build
 
 Both database URLs come from the Supabase dashboard, under **Project Settings → Database → Connection string**. They are different endpoints and both are needed:
 
-| Variable | Port | Used by |
-|---|---|---|
-| `DATABASE_URL` | 6543, pooled | the API's own traffic |
-| `DIRECT_URL` | 5432, direct | `prisma migrate`, `introspect`, `studio` |
+| Variable       | Port         | Used by                                  |
+| -------------- | ------------ | ---------------------------------------- |
+| `DATABASE_URL` | 6543, pooled | the API's own traffic                    |
+| `DIRECT_URL`   | 5432, direct | `prisma migrate`, `introspect`, `studio` |
 
 Keep `?pgbouncer=true` on `DATABASE_URL` — it stops Prisma emitting prepared statements, which transaction-mode pooling cannot support. Do not add `connection_limit=1`; that is a serverless setting and this API is a long-lived process. If the password contains `@ : / ?`, URL-encode it.
 
@@ -99,7 +99,19 @@ npm run db:seed           # loads outlets, departments, designations
 Then, in a single terminal:
 
 ```bash
-npm run dev
+npm run dev               # API + web panel together
+```
+
+That starts both, prefixing their output `[api]` and `[web]`. Open the link Vite
+prints — **http://localhost:5173** — which proxies `/api` to the API on 4000.
+Ctrl-C once stops both, and if the API fails to boot the web server stops with
+it rather than serving a panel that 500s on every request.
+
+To run just one:
+
+```bash
+npm run dev:api
+npm run dev:web
 ```
 
 ```bash
@@ -107,11 +119,28 @@ npm test                  # full suite — no Docker, no Redis, no Supabase
 npm run lint
 ```
 
+#### Where tests get their database
+
+`npm test` needs a real PostgreSQL, and finds one in this order:
+
+1. **`TEST_DATABASE_SERVER_URL`**, if you set it — a throwaway database is created there.
+2. **Embedded PostgreSQL** — a real binary downloaded and run on a random port. The default, and what CI uses.
+3. **Your `DIRECT_URL` server** — a throwaway `bookends_test_*` database, dropped afterwards.
+
+The third exists because PostgreSQL **refuses to run as Administrator**, so the
+embedded server cannot start in an elevated terminal — a common way to work on
+Windows. Rather than making `npm test` depend on which terminal you opened, it
+falls back to a server you already run. The run prints which one it used.
+
+Your development database is never touched: the fallback always creates a
+separate database and refuses to proceed if the name it generates is not a fresh
+`bookends_test_*` one.
+
 ### Writing a migration
 
 `npm run db:deploy` (`prisma migrate deploy`) applies existing migrations and is what you want against Supabase.
 
-Authoring a *new* migration is different: `prisma migrate dev` needs a shadow database that it creates and drops itself, and Supabase does not grant `CREATE DATABASE`. Point `SHADOW_DATABASE_URL` at a throwaway PostgreSQL you control, then run `npm run db:migrate`.
+Authoring a _new_ migration is different: `prisma migrate dev` needs a shadow database that it creates and drops itself, and Supabase does not grant `CREATE DATABASE`. Point `SHADOW_DATABASE_URL` at a throwaway PostgreSQL you control, then run `npm run db:migrate`.
 
 ### Seeding a first admin
 
