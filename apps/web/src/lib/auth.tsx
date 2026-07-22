@@ -54,6 +54,29 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null)
 
+/**
+ * The in-flight session-restore request, shared by every caller.
+ *
+ * React 18 StrictMode deliberately runs an effect's setup, cleanup, then setup
+ * again in development. A per-effect `cancelled` flag stops the first result
+ * being written to state, but it does NOT stop the second request — both
+ * setups still call the API, which is why a stale token produced *two* 401s in
+ * the server log rather than one.
+ *
+ * Sharing the promise makes the second setup reuse the first request instead of
+ * issuing another. Cleared when it settles, so a genuine later remount (or a
+ * fresh page load) re-verifies rather than trusting a cached answer — this is a
+ * request deduplicator, not a cache.
+ */
+let sessionRestore: Promise<{ data: MeResponse }> | null = null
+
+function restoreSession(): Promise<{ data: MeResponse }> {
+  sessionRestore ??= api.get<MeResponse>('/auth/me').finally(() => {
+    sessionRestore = null
+  })
+  return sessionRestore
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [loading, setLoading] = useState(true)
@@ -88,16 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    // Same cleanup flag useApi() uses. Without it this effect had none, so
-    // React 18's StrictMode — which deliberately mounts, unmounts and remounts
-    // in development to expose exactly this — fired two /auth/me calls whose
-    // responses both wrote state, the second overwriting the first. Harmless
-    // here today, but it is an unmounted-component write waiting to happen, and
-    // it is what produced the duplicate request in the dev log.
+    // Two separate guards, because they solve two different problems:
+    //  - `restoreSession()` dedupes the REQUEST, so StrictMode's second setup
+    //    reuses the first call instead of issuing another;
+    //  - `cancelled` discards a RESULT that arrives after unmount, which is the
+    //    cleanup this effect previously lacked entirely.
     let cancelled = false
 
-    api
-      .get<MeResponse>('/auth/me')
+    restoreSession()
       .then(({ data }) => {
         if (cancelled) return
         setUser({
