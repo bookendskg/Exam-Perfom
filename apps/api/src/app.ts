@@ -65,7 +65,29 @@ export function buildApp(deps: Deps): Application {
   }
 
   if (!config.isTest) {
-    app.use(pinoHttp({ logger }))
+    /**
+     * Production logs the full request/response — headers included — because
+     * that is what makes an incident reconstructable, and the redact list in
+     * createLogger() is what keeps tokens and passwords out of it.
+     *
+     * Development does not want that. pino-http's default serialisers emit
+     * every header on every request, which in a terminal is ~20 lines of JSON
+     * per call: the boot banner, Vite's URL and any actual error scroll away
+     * before you can read them. Dev gets one line per request instead.
+     */
+    app.use(
+      config.isProduction
+        ? pinoHttp({ logger })
+        : pinoHttp({
+            logger,
+            serializers: {
+              req: (req: { method: string; url: string }) => `${req.method} ${req.url}`,
+              res: (res: { statusCode: number }) => res.statusCode,
+            },
+            customSuccessMessage: (req, res) => `${req.method} ${req.url} → ${res.statusCode}`,
+            customErrorMessage: (req, res) => `${req.method} ${req.url} → ${res.statusCode}`,
+          })
+    )
   }
 
   app.get('/api/v1/health', markPublic(), (_req: Request, res: Response) => {

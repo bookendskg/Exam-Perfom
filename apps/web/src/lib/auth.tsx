@@ -88,9 +88,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    // Same cleanup flag useApi() uses. Without it this effect had none, so
+    // React 18's StrictMode — which deliberately mounts, unmounts and remounts
+    // in development to expose exactly this — fired two /auth/me calls whose
+    // responses both wrote state, the second overwriting the first. Harmless
+    // here today, but it is an unmounted-component write waiting to happen, and
+    // it is what produced the duplicate request in the dev log.
+    let cancelled = false
+
     api
       .get<MeResponse>('/auth/me')
       .then(({ data }) => {
+        if (cancelled) return
         setUser({
           userId: data.userId,
           role: data.role,
@@ -105,13 +114,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPasswordChangeRequired(data.mustChangePassword)
       })
       .catch((err: unknown) => {
+        if (cancelled) return
         if (err instanceof ApiError && err.code === 'PASSWORD_CHANGE_REQUIRED') {
           setPasswordChangeRequired(true)
         } else {
+          // A token that no longer verifies is worthless — drop it, so the next
+          // load goes straight to the login screen instead of repeating a 401.
           tokenStore.clear()
         }
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const login = useCallback(async (phone: string, password: string) => {
@@ -127,31 +145,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPasswordChangeRequired(data.mustChangePassword)
   }, [])
 
-  const changePassword = useCallback(
-    async (currentPassword: string, newPassword: string) => {
-      // The API rotates the session on a credential change (anti session
-      // fixation), so this returns a fresh token and the old one is already
-      // dead. Storing it before the /auth/me call below is not optional — that
-      // call would 401 with the previous token.
-      const { data: rotated } = await api.post<LoginResponse>('/auth/change-password', {
-        currentPassword,
-        newPassword,
-      })
-      tokenStore.set(rotated.accessToken)
-      setPasswordChangeRequired(false)
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    // The API rotates the session on a credential change (anti session
+    // fixation), so this returns a fresh token and the old one is already
+    // dead. Storing it before the /auth/me call below is not optional — that
+    // call would 401 with the previous token.
+    const { data: rotated } = await api.post<LoginResponse>('/auth/change-password', {
+      currentPassword,
+      newPassword,
+    })
+    tokenStore.set(rotated.accessToken)
+    setPasswordChangeRequired(false)
 
-      const { data } = await api.get<MeResponse>('/auth/me')
-      setUser({
-        userId: data.userId,
-        role: data.role,
-        employeeId: data.employeeId,
-        outletId: data.outletId,
-        departmentId: data.departmentId,
-        scopedOutletIds: data.scopedOutletIds,
-      })
-    },
-    []
-  )
+    const { data } = await api.get<MeResponse>('/auth/me')
+    setUser({
+      userId: data.userId,
+      role: data.role,
+      employeeId: data.employeeId,
+      outletId: data.outletId,
+      departmentId: data.departmentId,
+      scopedOutletIds: data.scopedOutletIds,
+    })
+  }, [])
 
   const value = useMemo(
     () => ({ user, loading, passwordChangeRequired, login, changePassword, logout }),

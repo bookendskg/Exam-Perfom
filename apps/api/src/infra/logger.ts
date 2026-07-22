@@ -1,4 +1,4 @@
-import { pino, type Logger } from 'pino'
+import { pino, type Logger, type DestinationStream } from 'pino'
 import type { Config } from '../config/env.js'
 
 /**
@@ -8,8 +8,8 @@ import type { Config } from '../config/env.js'
  * request — so every login would write the plaintext password and every
  * authenticated call would write a bearer token into the log file.
  */
-export function createLogger(config: Config): Logger {
-  return pino({
+export function createLogger(config: Config, destination?: DestinationStream): Logger {
+  const options = {
     level: config.isTest ? 'silent' : config.LOG_LEVEL,
     redact: {
       paths: [
@@ -29,5 +29,11 @@ export function createLogger(config: Config): Logger {
       ],
       censor: '[redacted]',
     },
-  })
+  }
+
+  // The destination seam exists so the redact list above can be asserted rather
+  // than trusted. It is a security control — without it every login writes a
+  // plaintext password and every authenticated call writes a bearer token — and
+  // an untested security control is an assumption.
+  return destination ? pino(options, destination) : pino(options)
 }
