@@ -9,9 +9,15 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// `url` is the pooled connection (Supabase's pgbouncer, port 6543); `directUrl`
+// is the direct one (port 5432). Both are required, and they are not
+// interchangeable: Prisma Migrate's schema engine holds a single session and
+// issues DDL in transactions, which transaction-mode pooling cannot carry — so
+// migrate and introspect go direct while the application traffic goes pooled.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
@@ -25,6 +31,14 @@ enum Role {
   trainer
   hr
   staff
+}
+
+/// The scope a role holds over a permission (§3.2).
+enum PermissionScope {
+  all
+  own_outlet
+  own_resource
+  none
 }
 
 enum Language {
@@ -309,6 +323,78 @@ model UserSession {
   @@map("user_sessions")
 }
 
+/// A permission the API can gate a route on, e.g. `employee:read` (§3.2).
+///
+/// Seeded from the PERMISSIONS constant in @bookends/core, which remains the
+/// compile-time contract: its `satisfies Record<string, Record<Role, Scope>>`
+/// is what forces every role to be accounted for when a permission is added,
+/// and a database row cannot do that. The table is the RUNTIME authority, so
+/// grants become data — editable per deployment, and later per tenant — without
+/// a release.
+model Permission {
+  id  String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key String @unique @db.VarChar(64)
+
+  /// Free text for an eventual admin UI; not read by the resolver.
+  description String? @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  roleGrants RolePermission[]
+
+  @@map("permissions")
+}
+
+/// What scope a role holds over a permission.
+///
+/// There is deliberately no `roles` table: Role is already a Prisma enum used
+/// by User.role and half the schema, and a second representation of the same
+/// concept would be one more thing able to disagree with itself. Custom
+/// per-tenant roles, if they ever arrive, are a change to that enum's story —
+/// not a reason to duplicate it now.
+model RolePermission {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role         Role
+  permissionId String          @map("permission_id") @db.Uuid
+  scope        PermissionScope
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+  @@index([role])
+  @@map("role_permissions")
+}
+
+/// Failed credential attempts, for lockout (§7.1).
+///
+/// Deliberately NOT a counter column on User. Two reasons: a counter cannot
+/// express "this one IP is attacking" versus "this account is under a
+/// distributed attack", and those need different responses — the first is
+/// locked hard, the second cannot be, or anyone who knows a phone number could
+/// lock its owner out at will.
+///
+/// Rows are the record; thresholds are applied by counting within a window, and
+/// old rows are pruned on write. There is no FK to User: attempts against a
+/// phone number that does not exist must also be counted, otherwise the table
+/// itself becomes an account-enumeration oracle.
+model LoginAttempt {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  /// The identifier that was attempted, normalised. Not necessarily a real user.
+  phone String @db.VarChar(15)
+  /// Normalised client key (IPv4 whole, IPv6 collapsed to /64) — see rate-limit.ts.
+  ipKey String @map("ip_key") @db.VarChar(64)
+  /// Which credential check failed, so change-password abuse is distinguishable.
+  kind String @default("login") @map("kind") @db.VarChar(20)
+
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz(6)
+
+  @@index([phone, attemptedAt])
+  @@index([phone, ipKey, attemptedAt])
+  @@index([attemptedAt])
+  @@map("login_attempts")
+}
+
 model Employee {
   id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId       String  @unique @map("user_id") @db.Uuid
@@ -433,6 +519,7 @@ model Outlet {
   departments     OutletDepartment[]
   sourceDocuments SourceDocument[]
   questions       Question[]
+  topics          Topic[]
   examTemplates   ExamTemplate[]
   exams           Exam[]
   scheduleConfigs ExamScheduleConfig[]
@@ -528,6 +615,15 @@ model Topic {
   sourceDocumentId String?  @map("source_document_id") @db.Uuid
   parentTopicId    String?  @map("parent_topic_id") @db.Uuid
   departmentId     String?  @map("department_id") @db.Uuid
+  /// NULL = applies to every outlet, matching Question/Exam/SourceDocument.
+  ///
+  /// Added because the §3.2 matrix grants outlet_manager `own_outlet` on
+  /// topic:manage, and without an outlet column that scope was unenforceable —
+  /// the delivered behaviour was `all`, letting any manager rename or re-parent
+  /// every topic in the system. Existing rows backfill to NULL, so today's
+  /// taxonomy stays global and admin-managed; only outlet-specific topics
+  /// created from here on carry an outlet.
+  outletId         String?  @map("outlet_id") @db.Uuid
   sortOrder        Int?     @default(0) @map("sort_order") @db.SmallInt
   isActive         Boolean  @default(true) @map("is_active")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -536,6 +632,7 @@ model Topic {
   parentTopic    Topic?          @relation("TopicTree", fields: [parentTopicId], references: [id])
   subTopics      Topic[]         @relation("TopicTree")
   department     Department?     @relation(fields: [departmentId], references: [id])
+  outlet         Outlet?         @relation(fields: [outletId], references: [id])
 
   questions           Question[]
   trainingAssignments TrainingAssignment[]
