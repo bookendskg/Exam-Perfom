@@ -4,6 +4,7 @@ import { buildApp, type Deps } from '../../src/app.js'
 import { loadConfig, type Config } from '../../src/config/env.js'
 import { MemorySessionStore } from '../../src/infra/session-store/memory-store.js'
 import { PostgresSessionStore } from '../../src/infra/session-store/postgres-store.js'
+import { resolveSessionPrincipal } from '../../src/rbac/principal.js'
 import { testDb } from './db.js'
 
 export interface TestHarness {
@@ -28,12 +29,14 @@ export function buildTestApp(overrides: Partial<Config> = {}): TestHarness {
   // A controllable clock: waiting out a 2-hour idle window is not a test.
   let clockOffsetMs = 0
   const now = () => Date.now() + clockOffsetMs
-  const store = new MemorySessionStore(now)
+  const store = new MemorySessionStore(async (sessionId) => {
+    const resolved = await resolveSessionPrincipal(testDb(), sessionId)
+    return resolved?.principal ?? null
+  }, now)
 
-  // The memory store caches the Principal, so it cannot observe a scope change
-  // (see its docblock). Tests asserting that a privilege was REVOKED must opt
-  // into the real store — production uses Postgres, and it is the stricter of
-  // the two. Those tests give up the controllable clock in exchange.
+  // Both stores now read role and scope from the database on every request, so
+  // they agree on authorisation; the memory store only adds a movable clock.
+  // Tests that need the real idle-timeout write path still opt into Postgres.
   const sessionStore =
     config.SESSION_STORE === 'postgres' ? new PostgresSessionStore(testDb()) : store
 

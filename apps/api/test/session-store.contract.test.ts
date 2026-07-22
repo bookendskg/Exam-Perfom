@@ -4,6 +4,7 @@ import { hashPassword } from '@bookends/core'
 import { MemorySessionStore } from '../src/infra/session-store/memory-store.js'
 import { PostgresSessionStore } from '../src/infra/session-store/postgres-store.js'
 import type { Principal, SessionStore } from '../src/infra/session-store/index.js'
+import { resolveSessionPrincipal } from '../src/rbac/principal.js'
 import { testDb, truncateAll, disconnectDb } from './helpers/db.js'
 
 /**
@@ -57,14 +58,21 @@ const IMPLEMENTATIONS: Array<{ name: string; make: () => Fixture }> = [
     name: 'MemorySessionStore',
     make: () => {
       let offset = 0
-      const store = new MemorySessionStore(() => Date.now() + offset)
+      const store = new MemorySessionStore(async (sessionId) => {
+        const resolved = await resolveSessionPrincipal(prisma, sessionId)
+        return resolved?.principal ?? null
+      }, () => Date.now() + offset)
       return {
         store,
+        // A real session row, same as the Postgres fixture. The memory store
+        // resolves role and scope from the database, so a bare random id would
+        // no longer be a session — and a fixture that cannot represent a real
+        // session cannot test the contract.
         async create(userId) {
-          const sessionId = randomUUID()
-          const principal = principalFor(userId, sessionId)
-          await store.put(sessionId, principal, 1800)
-          return { sessionId, principal }
+          const row = await makeSessionRow(userId)
+          const principal = principalFor(userId, row.id)
+          await store.put(row.id, principal, 1800)
+          return { sessionId: row.id, principal }
         },
         async advance(ms) {
           offset += ms
@@ -189,6 +197,46 @@ for (const impl of IMPLEMENTATIONS) {
       const user = await makeUser()
       await fixture.create(user.id)
       await expect(fixture.store.invalidatePrincipal(user.id)).resolves.not.toThrow()
+    })
+
+    /**
+     * The three below are the edge cases of §10, and they are the reason the
+     * memory store no longer caches. Each mutates the database WITHOUT telling
+     * the store — exactly what happens when an administrator deactivates
+     * someone, or another process revokes a session. A store that trusted its
+     * own cache would keep serving the principal and pass these vacuously.
+     */
+    it('touch returns null once the session row is revoked in the database', async () => {
+      const user = await makeUser()
+      const { sessionId } = await fixture.create(user.id)
+
+      await prisma.userSession.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(), revokedReason: 'admin_revoke' },
+      })
+
+      expect(await fixture.store.touch(sessionId, 1800)).toBeNull()
+    })
+
+    it('touch returns null once the user is deactivated', async () => {
+      const user = await makeUser()
+      const { sessionId } = await fixture.create(user.id)
+
+      await prisma.user.update({ where: { id: user.id }, data: { isActive: false } })
+
+      expect(await fixture.store.touch(sessionId, 1800)).toBeNull()
+    })
+
+    it('touch reflects a role change made in the database', async () => {
+      const user = await makeUser('admin')
+      const { sessionId } = await fixture.create(user.id)
+
+      expect((await fixture.store.touch(sessionId, 7200))?.role).toBe('admin')
+
+      await prisma.user.update({ where: { id: user.id }, data: { role: 'staff' } })
+
+      // Immediately, on the next request — not when a token happens to expire.
+      expect((await fixture.store.touch(sessionId, 7200))?.role).toBe('staff')
     })
   })
 }

@@ -3,6 +3,7 @@ import type { Role } from '@bookends/core'
 import type { Config } from '../../config/env.js'
 import { MemorySessionStore } from './memory-store.js'
 import { PostgresSessionStore } from './postgres-store.js'
+import { resolveSessionPrincipal } from '../../rbac/principal.js'
 
 /**
  * The cached authorisation context for a live session.
@@ -36,14 +37,28 @@ export interface SessionStore {
    */
   touch(sessionId: string, ttlSeconds: number): Promise<Principal | null>
   delete(sessionId: string): Promise<void>
-  deleteAllForUser(userId: string): Promise<void>
+  /**
+   * Ends every session for a user.
+   *
+   * `exceptSessionId` is not optional sugar — it is load-bearing. A staff login
+   * supersedes the user's previous sessions and then calls this to drop their
+   * store entries, but by that point the *new* session already exists. Without
+   * an exemption the Postgres store revokes the session that login just issued,
+   * and the user is 401'd on their very next request.
+   */
+  deleteAllForUser(userId: string, exceptSessionId?: string): Promise<void>
   /** Drops cached principals so the next request re-resolves scope from the DB. */
   invalidatePrincipal(userId: string): Promise<void>
 }
 
 export function createSessionStore(config: Config, prisma: PrismaClient): SessionStore {
   return config.SESSION_STORE === 'memory'
-    ? new MemorySessionStore()
+    ? // Even the in-memory store resolves role and scope from the database; it
+      // owns the idle clock and nothing more.
+      new MemorySessionStore(async (sessionId) => {
+        const resolved = await resolveSessionPrincipal(prisma, sessionId)
+        return resolved?.principal ?? null
+      })
     : new PostgresSessionStore(prisma)
 }
 
