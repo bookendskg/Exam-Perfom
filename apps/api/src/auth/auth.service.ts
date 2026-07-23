@@ -7,6 +7,7 @@ import {
   type Role,
 } from '@bookends/core'
 import { randomBytes } from 'node:crypto'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { ApiError } from '../http/api-error.js'
 import { type SessionService, type DeviceContext, type IssuedSession } from './session.service.js'
 import type { Logger } from 'pino'
@@ -18,6 +19,26 @@ import { ipKey } from '../http/middleware/rate-limit.js'
 /** §5.3 reset window. Short: the token is a password-equivalent while it lives. */
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000
 
+/**
+ * Floor on how long /auth/forgot-password takes to answer.
+ *
+ * The endpoint returns the same 200 for every input, but it did not take the
+ * same *time*: an unknown number cost one indexed SELECT and returned in a
+ * millisecond or two, while a real one additionally wrote a row and called the
+ * delivery channel. Response time therefore reported what the response body was
+ * carefully refusing to say, and the identical-wording defence was decorative.
+ *
+ * Dummy work cannot close this — the paths differ by a database write and a
+ * network call, and nothing fake matches the distribution of a real one. Holding
+ * every path to a fixed floor does, and it stays correct as the work inside
+ * changes: the OTP flow will add a second write and the floor absorbs it.
+ *
+ * Padding is measured on the wall clock rather than the injectable `now`,
+ * because this defends against a stopwatch held by the caller, not against
+ * anything the test clock models.
+ */
+const FORGOT_PASSWORD_FLOOR_MS = 500
+
 export class AuthService {
   constructor(
     private readonly prisma: PrismaClient,
@@ -26,7 +47,13 @@ export class AuthService {
     private readonly lockout: LockoutService,
     /** Optional so tests can construct the service without a logger. */
     private readonly logger?: Logger,
-    private readonly now: () => number = () => Date.now()
+    private readonly now: () => number = () => Date.now(),
+    /**
+     * Overridable so the timing test can assert the floor is applied without
+     * waiting half a second per case, and so it can be raised in production
+     * without a code change if the work inside ever grows past it.
+     */
+    private readonly floorMs: number = FORGOT_PASSWORD_FLOOR_MS
   ) {}
 
   /**
@@ -106,8 +133,10 @@ export class AuthService {
     await this.lockout.clear(user.phone)
 
     // The policy depends on the user's role, which is only known after lookup —
-    // so this cannot be a static route-level schema.
-    const violations = validatePassword(newPassword, user.role as Role)
+    // so this cannot be a static route-level schema. The field name must match
+    // the input the panel actually renders, or the violations arrive addressed
+    // to a field that is not on the form and the user sees no specifics.
+    const violations = validatePassword(newPassword, user.role as Role, 'newPassword')
     if (violations.length > 0) {
       throw ApiError.validation('Password does not meet requirements', violations)
     }
@@ -155,6 +184,19 @@ export class AuthService {
    * timing work exists to prevent.
    */
   async forgotPassword(phone: string): Promise<void> {
+    const startedAt = Date.now()
+    try {
+      await this.issuePasswordReset(phone)
+    } finally {
+      // In a `finally` so a thrown path cannot be timed either — an exception
+      // that escaped early would otherwise be its own, faster, signal.
+      const remaining = this.floorMs - (Date.now() - startedAt)
+      if (remaining > 0) await sleep(remaining)
+    }
+  }
+
+  /** The real work behind {@link forgotPassword}, held to that method's floor. */
+  private async issuePasswordReset(phone: string): Promise<void> {
     // Generated unconditionally, before the account is known to exist, so the
     // work is identical on both paths. Cheap (32 random bytes + one sha256).
     const token = randomBytes(32).toString('base64url')
@@ -197,7 +239,25 @@ export class AuthService {
     try {
       await this.dispatcher.sendPasswordReset({ phone, token, expiresAt })
     } catch (err) {
-      this.logger?.error({ err }, 'Password reset could not be delivered')
+      this.logger?.error({ err }, 'Password reset could not be delivered; token rolled back')
+
+      /**
+       * Undo the row above, or an undeliverable token locks recovery shut.
+       *
+       * The `liveToken` guard treats a stored token as proof that a message is
+       * out there working. When delivery fails that premise is false, and the
+       * guard then rejects every retry for the full 30-minute window — so the
+       * account cannot start a recovery it never received. Steady state was
+       * mint, persist, fail, swallow, answer 200, and go dead for half an hour.
+       *
+       * Filtered on our own hash, not a blind clear: a concurrent request may
+       * have already replaced this token with one that WAS delivered, and
+       * wiping that would break a working reset to tidy up a failed one.
+       */
+      await this.prisma.user.updateMany({
+        where: { id: user.id, passwordResetTokenHash: tokenHash },
+        data: { passwordResetTokenHash: null, passwordResetExpiresAt: null },
+      })
     }
   }
 
@@ -224,7 +284,7 @@ export class AuthService {
       ])
     }
 
-    const violations = validatePassword(newPassword, user.role as Role)
+    const violations = validatePassword(newPassword, user.role as Role, 'newPassword')
     if (violations.length > 0) {
       throw ApiError.validation('Password does not meet requirements', violations)
     }

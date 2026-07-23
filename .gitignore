@@ -44,3 +44,6 @@ coverage/
 # Local database volumes
 pgdata/
 redis-data/
+
+# Reset tokens written by DevFileDispatcher. Password-equivalent — never commit.
+.dev-password-resets.log

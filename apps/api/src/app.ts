@@ -9,6 +9,7 @@ import type { PrismaClient } from '@bookends/db'
 import { ok } from '@bookends/core'
 import type { Config } from './config/env.js'
 import type { SessionStore } from './infra/session-store/index.js'
+import type { NotificationDispatcher } from './notifications/dispatcher.js'
 import { errorHandler, notFoundHandler } from './http/middleware/error-handler.js'
 import { roleLimiter } from './http/middleware/rate-limit.js'
 import { markPublic } from './rbac/require-permission.js'
@@ -34,6 +35,16 @@ export interface Deps {
   logger: Logger
   prisma: PrismaClient
   sessionStore: SessionStore
+  /**
+   * Overrides the outbound notification channel. Defaults by environment: a
+   * local file sink outside production, and a dispatcher that refuses inside it.
+   *
+   * Injectable so tests can drive a delivery failure — the branch that decides
+   * whether an undeliverable reset token is rolled back or left to block the
+   * account for half an hour is otherwise unreachable without setting
+   * NODE_ENV=production, and so can only be tested by inspection.
+   */
+  dispatcher?: NotificationDispatcher
 }
 
 /**

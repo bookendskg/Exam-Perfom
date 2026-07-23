@@ -86,9 +86,26 @@ export interface Result<T> {
 const NEVER_REFRESH = [
   '/auth/refresh',
   '/auth/login',
+  '/auth/logout',
   '/auth/forgot-password',
   '/auth/reset-password',
 ]
+
+/**
+ * Blocks token renewal once the user has deliberately signed out.
+ *
+ * Without it, signing out could undo itself. Logout revokes the session and
+ * clears the refresh cookie, but a request already in flight can answer 401
+ * *after* that — and the interceptor's response to a 401 is to refresh. If the
+ * logout request had not landed yet, or failed because the device was offline,
+ * the cookie is still in the jar and that refresh succeeds: the panel silently
+ * re-authenticates an account the user just signed out of.
+ *
+ * The latch is deliberately client-side and deliberately not the whole defence.
+ * The server revoking the session is what actually ends it; this only stops the
+ * client from trying to resurrect one.
+ */
+let refreshSuppressed = false
 
 /**
  * The in-flight refresh, shared by every caller.
@@ -129,8 +146,41 @@ async function performRefresh(): Promise<boolean> {
   }
 }
 
+/**
+ * Ends the session on the server, then locally — in that order, and always.
+ *
+ * The panel used to sign out by deleting the access token from localStorage and
+ * nothing else. The `user_sessions` row stayed live and the HttpOnly refresh
+ * cookie stayed in the jar for the rest of its seven days, so "signed out" meant
+ * only that this tab had forgotten its token. Anyone who reached the cookie
+ * could mint a fresh access token from it, and once automatic refresh existed
+ * the panel itself would do exactly that on the next 401.
+ *
+ * Resolves even when the request fails: a user who cannot reach the network
+ * still gets signed out of the device in front of them, which is the part they
+ * can see. The server-side session then expires on its own schedule.
+ */
+export async function endSession(): Promise<void> {
+  // Set first, so a 401 racing this call cannot start a renewal behind our back.
+  refreshSuppressed = true
+  refreshInFlight = null
+  try {
+    await request('/auth/logout', { method: 'POST' })
+  } catch {
+    // Already invalid, already revoked, or offline. All three end the same way.
+  } finally {
+    tokenStore.clear()
+  }
+}
+
+/** Re-arms refreshing after a fresh sign-in. */
+export function resumeRefreshing(): void {
+  refreshSuppressed = false
+}
+
 /** Refreshes the access token, collapsing concurrent callers onto one request. */
 function refreshAccessToken(): Promise<boolean> {
+  if (refreshSuppressed) return Promise.resolve(false)
   if (refreshInFlight) return refreshInFlight
 
   const attempt = performRefresh().finally(() => {

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { api, setAuthHandlers, tokenStore, ApiError } from './api'
+import { api, setAuthHandlers, tokenStore, ApiError, endSession, resumeRefreshing } from './api'
 
 /** The six §3.2 roles. */
 export type Role = 'super_admin' | 'admin' | 'outlet_manager' | 'trainer' | 'hr' | 'staff'
@@ -49,7 +49,8 @@ interface AuthState {
   passwordChangeRequired: boolean
   login: (phone: string, password: string) => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
-  logout: () => void
+  /** Async because it revokes the session server-side before clearing local state. */
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -82,8 +83,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false)
 
-  const logout = useCallback(() => {
-    tokenStore.clear()
+  /**
+   * Signing out has to reach the server. `endSession` revokes the session row
+   * and clears the refresh cookie; clearing local state alone left both alive.
+   * It never rejects, so the local half always runs.
+   */
+  const logout = useCallback(async () => {
+    await endSession()
     setUser(null)
     setPasswordChangeRequired(false)
   }, [])
@@ -156,6 +162,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (phone: string, password: string) => {
     const { data } = await api.post<LoginResponse>('/auth/login', { phone, password })
     tokenStore.set(data.accessToken)
+    // A previous logout latched refreshing off; this session is entitled to it.
+    resumeRefreshing()
     setUser({
       userId: data.user.id,
       role: data.user.role,

@@ -20,7 +20,7 @@ import {
   type ResetPasswordInput,
 } from './auth.schemas.js'
 import { LockoutService } from './lockout.service.js'
-import { LoggingDispatcher, UnconfiguredDispatcher } from '../notifications/dispatcher.js'
+import { DevFileDispatcher, UnconfiguredDispatcher } from '../notifications/dispatcher.js'
 import { setRefreshCookie, clearRefreshCookie, readRefreshToken } from './cookies.js'
 
 function deviceFrom(req: Request, deviceInfo?: unknown): DeviceContext {
@@ -38,9 +38,9 @@ export function buildAuthRouter(deps: Deps) {
   // No delivery channel exists yet (§13's WhatsApp is a later module). Dev logs
   // the link so the flow is testable; production refuses rather than silently
   // accepting a reset it cannot deliver.
-  const dispatcher = config.isProduction
-    ? new UnconfiguredDispatcher()
-    : new LoggingDispatcher(logger)
+  const dispatcher =
+    deps.dispatcher ??
+    (config.isProduction ? new UnconfiguredDispatcher() : new DevFileDispatcher(logger))
   const lockout = new LockoutService(prisma)
   const auth = new AuthService(prisma, sessions, dispatcher, lockout, logger)
 

@@ -129,9 +129,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [drawerOpen])
 
+  /**
+   * Navigates only after the session is actually revoked.
+   *
+   * Leaving in the same tick would race the sign-out against a fast re-login:
+   * `logout` clears the stored token when its request settles, so a login that
+   * completed in the gap would have its brand-new token wiped by the tail of the
+   * previous sign-out. `logout` never rejects, so this always reaches /login.
+   */
   const signOut = () => {
-    logout()
-    navigate('/login')
+    void logout().then(() => navigate('/login'))
   }
 
   const sidebarBody = (onNavigate?: () => void) => (

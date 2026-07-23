@@ -37,11 +37,25 @@ export interface PolicyViolation {
 /**
  * Returns [] when the password satisfies the role's policy. The shape matches
  * the §5.2 error `details[]` array so violations pass straight through.
+ *
+ * `field` names the input the violations belong to, and defaults to the generic
+ * `password`. It is a parameter because the caller owns the form, not this
+ * module: change-password and reset-password both collect the new password in a
+ * field called `newPassword`, and a hardcoded `password` meant every violation
+ * was addressed to an input that did not exist on those screens.
+ *
+ * The symptom was invisible from the server side — the API returned a perfectly
+ * correct 400 listing every broken rule — but the panel looked up the details by
+ * field name, found nothing, and showed only the summary "Password does not meet
+ * requirements". Users were told they had failed without being told what to fix.
  */
-export function validatePassword(password: string, role: Role): PolicyViolation[] {
+export function validatePassword(
+  password: string,
+  role: Role,
+  field = 'password'
+): PolicyViolation[] {
   const policy = policyForRole(role)
   const violations: PolicyViolation[] = []
-  const field = 'password'
 
   if (password.length < policy.minLength) {
     violations.push({
