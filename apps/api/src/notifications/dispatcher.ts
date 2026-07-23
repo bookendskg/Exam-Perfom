@@ -5,7 +5,8 @@ import { ApiError } from '../http/api-error.js'
 
 export interface PasswordResetMessage {
   phone: string
-  token: string
+  /** The six-digit one-time code the user types back in. */
+  code: string
   expiresAt: Date
 }
 
@@ -69,7 +70,7 @@ export class DevFileDispatcher implements NotificationDispatcher {
         `[${new Date().toISOString()}]`,
         `phone=${message.phone}`,
         `expires=${message.expiresAt.toISOString()}`,
-        `token=${message.token}`,
+        `code=${message.code}`,
       ].join(' ') + '\n'
 
     // Not swallowed. A failure here has to reach AuthService so it can roll the

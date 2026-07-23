@@ -1,0 +1,23 @@
+{
+  // Type-checks the test suite, which the build config deliberately does not.
+  //
+  // `tsconfig.json` compiles to dist/ and so includes only src/ — tests must
+  // never be emitted. The effect was that no test file in this app was type
+  // checked by anything: `npm run typecheck` skipped them, and vitest strips
+  // types with esbuild without looking at them. A test could call a function
+  // with the wrong argument shape and fail at runtime with an unrelated
+  // message, or silently pass while asserting on `undefined`.
+  //
+  // Renaming a field on PasswordResetMessage is exactly that case: every test
+  // constructing the old shape still "compiled", and the mismatch only showed
+  // up as a confusing assertion failure.
+  //
+  // noEmit, so this is a checker and never a build step.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["test/**/*", "src/**/*"],
+  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/db" }]
+}

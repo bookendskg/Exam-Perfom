@@ -242,6 +242,8 @@ model User {
   passwordResetTokenHash String?   @unique @map("password_reset_token_hash") @db.Char(64)
   passwordResetExpiresAt DateTime? @map("password_reset_expires_at") @db.Timestamptz(6)
 
+  passwordResetOtps PasswordResetOtp[]
+
   // NOTE: §4.1's `refresh_token TEXT` column was dropped here. §7.5 requires
   // multiple concurrent sessions for admin roles, each with its own device info
   // and idle expiry — one column cannot hold that. See UserSession.
@@ -563,6 +565,45 @@ model LoginAttempt {
   @@index([phone, ipKey, attemptedAt])
   @@index([attemptedAt])
   @@map("login_attempts")
+}
+
+/// §5.3 password recovery, one-time-code half.
+///
+/// A row per issued code rather than columns on User, because the properties
+/// that make a code safe are per-issue: how many times THIS code has been
+/// guessed, when THIS code expires, and whether THIS code has been spent. Those
+/// cannot be expressed on the user row without losing them every reissue.
+///
+/// The code buys only the right to obtain a reset token; the token itself still
+/// lives on User and drives the existing reset-password endpoint. Splitting it
+/// that way means the recovery half that was already hardened is untouched.
+model PasswordResetOtp {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// Argon2id, not a bare digest. A six-digit code has only a million possible
+  /// values, so a leaked table of SHA-256 digests would be exhausted instantly
+  /// on a laptop; a memory-hard hash makes that pointless. The cost is paid on
+  /// a rate-limited endpoint and is absorbed by the forgot-password floor.
+  codeHash String @map("code_hash") @db.VarChar(255)
+
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  /// Guesses spent against this code. Incremented before the comparison, so a
+  /// crash mid-verify costs the attacker an attempt rather than granting one.
+  attemptCount Int @default(0) @map("attempt_count")
+  /// Set the moment the code is spent or superseded. Single-use is enforced by
+  /// requiring this to be null, so a replay finds nothing to verify against.
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The verify path reads the newest live code for one user; the retention
+  /// sweep reads by age.
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("password_reset_otps")
 }
 
 model Employee {

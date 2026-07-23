@@ -27,54 +27,53 @@ afterAll(async () => {
   await disconnectDb()
 })
 
-async function resetStateFor(phone: string) {
-  const user = await testDb().user.findUnique({
-    where: { phone },
-    select: { passwordResetTokenHash: true, passwordResetExpiresAt: true },
+async function liveCodesFor(phone: string) {
+  return testDb().passwordResetOtp.count({
+    where: { user: { phone }, consumedAt: null, expiresAt: { gt: new Date() } },
   })
-  return user
 }
 
-describe('B1 — an undeliverable reset token must not lock recovery shut', () => {
-  it('clears the token when delivery fails, so the next request is not refused', async () => {
+describe('B1 — an undeliverable reset code must not lock recovery shut', () => {
+  it('retires the code when delivery fails, so the next request is not refused', async () => {
     const { phone } = await makeUser({ role: 'admin' })
 
     dispatcher.failWith = new Error('no delivery channel configured')
     const first = await request(app).post('/api/v1/auth/forgot-password').send({ phone })
     expect(first.status, 'a delivery failure must never reach the caller').toBe(200)
 
-    // The token was written before delivery was attempted. If it survives the
-    // failure, the "do not overwrite a live token" guard treats it as proof that
-    // a working message is out there and refuses every retry for 30 minutes.
-    const after = await resetStateFor(phone)
-    expect(after?.passwordResetTokenHash, 'undelivered token must be rolled back').toBeNull()
-    expect(after?.passwordResetExpiresAt).toBeNull()
+    // The code row is written before delivery is attempted. If it survives the
+    // failure, the resend cooldown reads it as proof that a working message is
+    // out there and refuses the retry — so the account cannot start a recovery
+    // it never received.
+    expect(await liveCodesFor(phone), 'undelivered code must be retired').toBe(0)
 
-    // The real proof: recovery still works immediately afterwards.
+    // The real proof: recovery still works immediately afterwards, with no wait.
     dispatcher.failWith = null
     const second = await request(app).post('/api/v1/auth/forgot-password').send({ phone })
     expect(second.status).toBe(200)
-    expect(dispatcher.sent, 'the retry must actually issue a token').toHaveLength(1)
+    expect(dispatcher.sent, 'the retry must actually issue a code').toHaveLength(1)
     expect(dispatcher.sent[0]?.phone).toBe(phone)
   })
 
-  it('still keeps a delivered token, so repeat requests cannot invalidate it', async () => {
+  it('keeps a delivered code, so repeat requests cannot invalidate it', async () => {
     const { phone } = await makeUser({ role: 'admin' })
 
     await request(app).post('/api/v1/auth/forgot-password').send({ phone })
-    const issued = dispatcher.sent[0]?.token
+    const issued = dispatcher.sent[0]?.code
     expect(issued).toBeTruthy()
 
     // The rollback must not have weakened the anti-denial-of-recovery guard:
-    // a second request while the first token is live is still a no-op.
+    // a second request inside the cooldown is still a no-op, so an attacker
+    // cannot invalidate the code the owner is halfway through typing.
     await request(app).post('/api/v1/auth/forgot-password').send({ phone })
-    expect(dispatcher.sent, 'a live token must not be replaced').toHaveLength(1)
+    expect(dispatcher.sent, 'a live code must not be replaced immediately').toHaveLength(1)
 
-    // And the token the user was actually sent still works.
+    // And the code the user was actually sent still works.
     const res = await request(app)
-      .post('/api/v1/auth/reset-password')
-      .send({ token: issued, newPassword: 'Str0ngPass' })
+      .post('/api/v1/auth/verify-reset-code')
+      .send({ phone, code: issued })
     expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body.data.resetToken).toBeTruthy()
   })
 })
 

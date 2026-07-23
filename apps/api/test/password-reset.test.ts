@@ -1,17 +1,19 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
-import { createHash } from 'node:crypto'
-import { buildTestApp } from './helpers/app.js'
+import { buildTestApp, type RecordingDispatcher } from './helpers/app.js'
 import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
 import { makeUser, resetOutletManagers } from './helpers/factories.js'
 
 let app: Application
+let dispatcher: RecordingDispatcher
 
 beforeEach(async () => {
   await truncateAll()
   await resetOutletManagers()
-  app = buildTestApp().app
+  const harness = buildTestApp()
+  app = harness.app
+  dispatcher = harness.dispatcher
 })
 
 afterAll(async () => {
@@ -42,7 +44,13 @@ describe('POST /auth/forgot-password (§5.3)', () => {
 
   it('stores the token hashed, never in plaintext', async () => {
     const { phone, user } = await makeUser()
+
+    // The token is minted by the verify step now, not by forgot-password — the
+    // first step issues only a one-time code (see reset-otp.test.ts).
     await forgot(phone)
+    await request(app)
+      .post('/api/v1/auth/verify-reset-code')
+      .send({ phone, code: dispatcher.sent.at(-1)?.code })
 
     const after = await testDb().user.findUniqueOrThrow({ where: { id: user.id } })
     expect(after.passwordResetTokenHash).toMatch(/^[0-9a-f]{64}$/)
@@ -53,24 +61,32 @@ describe('POST /auth/forgot-password (§5.3)', () => {
     const { phone, user } = await makeUser({ isActive: false })
     await forgot(phone)
 
-    const after = await testDb().user.findUniqueOrThrow({ where: { id: user.id } })
-    expect(after.passwordResetTokenHash).toBeNull()
+    expect(dispatcher.sent, 'a deactivated account must not receive a code').toHaveLength(0)
+    const codes = await testDb().passwordResetOtp.count({ where: { userId: user.id } })
+    expect(codes).toBe(0)
   })
 })
 
 describe('POST /auth/reset-password (§5.3)', () => {
-  /** Drives the real flow, then reads back the token the dispatcher was handed. */
-  async function requestReset(phone: string, userId: string) {
+  /**
+   * Drives the real recovery flow end to end and returns the reset token.
+   *
+   * Previously this injected a known hash straight into the user row, because
+   * forgot-password minted a token that only the dispatcher ever saw. Now the
+   * dispatcher is captured, so the whole path — request a code, read the code
+   * the user would have received, exchange it — runs for real. The injected
+   * version silently stopped working the moment the token stopped being minted
+   * at step one, which is precisely the kind of break a stubbed test hides.
+   */
+  async function requestReset(phone: string, _userId: string) {
     await forgot(phone)
-    // The service hashes with sha256; invert by generating a token whose hash we
-    // control is impossible, so instead assert via the stored hash and use a
-    // known-good raw token injected directly.
-    const raw = 'test-raw-reset-token-value'
-    await testDb().user.update({
-      where: { id: userId },
-      data: { passwordResetTokenHash: createHash('sha256').update(raw).digest('hex') },
-    })
-    return raw
+    const code = dispatcher.sent.at(-1)?.code
+    expect(code, 'forgot-password must have dispatched a code').toBeTruthy()
+
+    const verified = await request(app).post('/api/v1/auth/verify-reset-code').send({ phone, code })
+    expect(verified.status, JSON.stringify(verified.body)).toBe(200)
+
+    return verified.body.data.resetToken as string
   }
 
   it('resets the password with a valid token', async () => {

@@ -33,7 +33,7 @@ function capturingLogger() {
 
 const message = () => ({
   phone: '9876543210',
-  token: 'tok_SUPERSECRET_do_not_log_me',
+  code: '481937',
   expiresAt: new Date('2026-01-01T00:30:00.000Z'),
 })
 
@@ -47,13 +47,13 @@ afterEach(async () => {
 })
 
 describe('DevFileDispatcher', () => {
-  it('never writes the raw token to the log stream', async () => {
+  it('never writes the raw code to the log stream', async () => {
     const msg = message()
     await new DevFileDispatcher(capturingLogger(), path).sendPasswordReset(msg)
 
     expect(lines.length, 'it should still say something happened').toBeGreaterThan(0)
     const logged = lines.join('\n')
-    expect(logged, 'the token must not appear anywhere in the log').not.toContain(msg.token)
+    expect(logged, 'the code must not appear anywhere in the log').not.toContain(msg.code)
   })
 
   it('does not log the phone number in the clear either', async () => {
@@ -67,23 +67,23 @@ describe('DevFileDispatcher', () => {
     expect(logged).toContain('10')
   })
 
-  it('writes the token to the file, so the dev flow still works end to end', async () => {
+  it('writes the code to the file, so the dev flow still works end to end', async () => {
     const msg = message()
     await new DevFileDispatcher(capturingLogger(), path).sendPasswordReset(msg)
 
     const contents = await readFile(path, 'utf8')
-    expect(contents).toContain(msg.token)
+    expect(contents).toContain(msg.code)
     expect(contents).toContain(msg.expiresAt.toISOString())
   })
 
   it('appends rather than truncating, so a second reset does not erase the first', async () => {
     const dispatcher = new DevFileDispatcher(capturingLogger(), path)
-    await dispatcher.sendPasswordReset({ ...message(), token: 'first_token' })
-    await dispatcher.sendPasswordReset({ ...message(), token: 'second_token' })
+    await dispatcher.sendPasswordReset({ ...message(), code: '111111' })
+    await dispatcher.sendPasswordReset({ ...message(), code: '222222' })
 
     const contents = await readFile(path, 'utf8')
-    expect(contents).toContain('first_token')
-    expect(contents).toContain('second_token')
+    expect(contents).toContain('111111')
+    expect(contents).toContain('222222')
   })
 
   it('propagates a write failure instead of swallowing it', async () => {

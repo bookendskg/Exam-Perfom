@@ -19,6 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc -b --pretty",
+    "typecheck:tests": "tsc --noEmit -p apps/api/tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "npm run generate -w @bookends/db",

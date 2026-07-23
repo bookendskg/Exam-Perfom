@@ -13,10 +13,12 @@ import {
   refreshSchema,
   changePasswordSchema,
   forgotPasswordSchema,
+  verifyResetCodeSchema,
   resetPasswordSchema,
   type LoginInput,
   type ChangePasswordInput,
   type ForgotPasswordInput,
+  type VerifyResetCodeInput,
   type ResetPasswordInput,
 } from './auth.schemas.js'
 import { LockoutService } from './lockout.service.js'
@@ -195,7 +197,7 @@ export function buildAuthRouter(deps: Deps) {
           // Always 200, even for an unknown phone — anything else enumerates
           // accounts. The response says nothing about whether one was sent.
           res.json(
-            ok({ message: 'If that phone number is registered, a reset link has been sent' })
+            ok({ message: 'If that phone number is registered, a reset code has been sent' })
           )
         } catch (err) {
           next(err)
@@ -215,6 +217,35 @@ export function buildAuthRouter(deps: Deps) {
           const body = req.valid!.body as ResetPasswordInput
           await auth.resetPassword(body.token, body.newPassword)
           res.json(ok({ passwordReset: true }))
+        } catch (err) {
+          next(err)
+        }
+      })()
+    }
+  )
+
+  /**
+   * §5.3 POST /api/v1/auth/verify-reset-code — code in, reset token out.
+   *
+   * Carries the same two limiters as forgot-password and login. The per-code
+   * attempt budget bounds guessing at ONE code; these bound how fast an
+   * attacker can cycle through many, which is the axis the row counter cannot
+   * see. Both are needed.
+   */
+  router.post(
+    '/verify-reset-code',
+    publicLimiter(),
+    loginLimiter(),
+    validate({ body: verifyResetCodeSchema }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const body = req.valid!.body as VerifyResetCodeInput
+          const token = await auth.verifyResetCode(body.phone, body.code)
+          // The token is the credential for the final step. It is returned in
+          // the body rather than a cookie because the caller is not yet a
+          // session — there is nothing to attach a cookie to.
+          res.json(ok({ resetToken: token }))
         } catch (err) {
           next(err)
         }

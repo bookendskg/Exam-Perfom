@@ -6,7 +6,7 @@ import {
   validatePassword,
   type Role,
 } from '@bookends/core'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ApiError } from '../http/api-error.js'
 import { type SessionService, type DeviceContext, type IssuedSession } from './session.service.js'
@@ -38,6 +38,48 @@ const RESET_TOKEN_TTL_MS = 30 * 60 * 1000
  * anything the test clock models.
  */
 const FORGOT_PASSWORD_FLOOR_MS = 500
+
+/**
+ * How long a one-time code is good for.
+ *
+ * Short on purpose: the code is the whole credential for that window, and ten
+ * minutes is long enough to read a message and type six digits while leaving an
+ * attacker almost no room to grind. The reset token it buys lives longer,
+ * because by then the account holder has already proven possession.
+ */
+const OTP_TTL_MS = 10 * 60 * 1000
+
+/**
+ * Guesses allowed against one code. Five of a million leaves a one-in-200,000
+ * chance per issued code, and the code dies the moment the budget is spent.
+ */
+const OTP_MAX_ATTEMPTS = 5
+
+/** How soon a new code may replace an unspent one. See `issuePasswordReset`. */
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000
+
+/**
+ * A uniformly random six-digit code, leading zeros included.
+ *
+ * `randomInt` rather than `Math.random`, which is not a cryptographic source —
+ * predicting the code would defeat the entire flow. Rejection is handled inside
+ * `randomInt`, so there is no modulo bias favouring low codes.
+ */
+function generateOtpCode(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0')
+}
+
+/**
+ * The single answer for every failed verification.
+ *
+ * Wrong code, expired code, spent code, no code, and unknown account all end
+ * here. Any distinction between them reports whether the number is registered.
+ */
+function invalidResetCode(): ApiError {
+  return ApiError.validation('Invalid or expired code', [
+    { field: 'code', message: 'This code is incorrect or has expired' },
+  ])
+}
 
 export class AuthService {
   constructor(
@@ -197,35 +239,46 @@ export class AuthService {
 
   /** The real work behind {@link forgotPassword}, held to that method's floor. */
   private async issuePasswordReset(phone: string): Promise<void> {
-    // Generated unconditionally, before the account is known to exist, so the
-    // work is identical on both paths. Cheap (32 random bytes + one sha256).
-    const token = randomBytes(32).toString('base64url')
-    const tokenHash = hashOpaqueToken(token)
-    const expiresAt = new Date(this.now() + RESET_TOKEN_TTL_MS)
+    // Generated unconditionally, before the account is known to exist, so both
+    // paths do the same work.
+    const code = generateOtpCode()
 
     const user = await this.prisma.user.findUnique({ where: { phone } })
     if (!user || !user.isActive) return
 
-    // Do not overwrite a reset token that is still live.
-    //
-    // Overwriting made this endpoint a way to *deny* account recovery: anyone
-    // who knew a phone number could fire repeated requests and invalidate every
-    // link the real owner was sent, permanently. Leaving the existing token
-    // alone means the message the user already received keeps working for its
-    // full window. A caller who genuinely lost that message waits it out — the
-    // lesser harm, and the reason the window is only 30 minutes.
-    const liveToken =
-      user.passwordResetTokenHash !== null &&
-      user.passwordResetExpiresAt !== null &&
-      user.passwordResetExpiresAt.getTime() > this.now()
-    if (liveToken) return
+    /**
+     * Do not reissue while a freshly-sent code is still in flight.
+     *
+     * Reissuing on every request made this endpoint a way to *deny* account
+     * recovery: anyone who knew a phone number could fire repeated requests and
+     * invalidate every code the real owner was sent, indefinitely. A short
+     * cooldown keeps "resend" working — the reason a user asks again is usually
+     * that the first message has not arrived yet — while bounding how often an
+     * attacker can invalidate a code the owner is in the middle of typing.
+     */
+    const newest = await this.prisma.passwordResetOtp.findFirst({
+      where: { userId: user.id, consumedAt: null, expiresAt: { gt: new Date(this.now()) } },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (newest && this.now() - newest.createdAt.getTime() < OTP_RESEND_COOLDOWN_MS) return
 
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const expiresAt = new Date(this.now() + OTP_TTL_MS)
+
+    // Supersede whatever came before. Exactly one code is ever live for an
+    // account, so a guess cannot be spread across several outstanding codes to
+    // multiply the attempt budget.
+    await this.prisma.passwordResetOtp.updateMany({
+      where: { userId: user.id, consumedAt: null },
+      data: { consumedAt: new Date(this.now()) },
+    })
+
+    const otp = await this.prisma.passwordResetOtp.create({
       data: {
-        // Stored hashed: a leaked database must not yield working reset links.
-        passwordResetTokenHash: tokenHash,
-        passwordResetExpiresAt: expiresAt,
+        userId: user.id,
+        // Argon2id, not a bare digest: six digits is a million possibilities,
+        // which a plain SHA-256 table gives up instantly.
+        codeHash: await hashPassword(code),
+        expiresAt,
       },
     })
 
@@ -237,28 +290,122 @@ export class AuthService {
     // very property the identical-response wording exists to provide. The
     // operator needs to know; the caller must not.
     try {
-      await this.dispatcher.sendPasswordReset({ phone, token, expiresAt })
+      await this.dispatcher.sendPasswordReset({ phone, code, expiresAt })
     } catch (err) {
-      this.logger?.error({ err }, 'Password reset could not be delivered; token rolled back')
+      this.logger?.error({ err }, 'Password reset could not be delivered; code rolled back')
 
       /**
-       * Undo the row above, or an undeliverable token locks recovery shut.
+       * Undo the row above, or an undeliverable code locks recovery shut.
        *
-       * The `liveToken` guard treats a stored token as proof that a message is
-       * out there working. When delivery fails that premise is false, and the
-       * guard then rejects every retry for the full 30-minute window — so the
-       * account cannot start a recovery it never received. Steady state was
-       * mint, persist, fail, swallow, answer 200, and go dead for half an hour.
+       * The cooldown treats a stored code as proof that a message is out there
+       * working. When delivery fails that premise is false, and the cooldown
+       * then rejects every retry — so the account cannot start a recovery it
+       * never received. Steady state was mint, persist, fail, swallow, answer
+       * 200, and go dead.
        *
-       * Filtered on our own hash, not a blind clear: a concurrent request may
-       * have already replaced this token with one that WAS delivered, and
-       * wiping that would break a working reset to tidy up a failed one.
+       * Scoped to the row we just created, not a blind clear: a concurrent
+       * request may already have issued a code that WAS delivered, and wiping
+       * that would break a working reset to tidy up a failed one.
        */
-      await this.prisma.user.updateMany({
-        where: { id: user.id, passwordResetTokenHash: tokenHash },
-        data: { passwordResetTokenHash: null, passwordResetExpiresAt: null },
+      await this.prisma.passwordResetOtp.updateMany({
+        where: { id: otp.id, consumedAt: null },
+        data: { consumedAt: new Date(this.now()) },
       })
     }
+  }
+
+  /**
+   * §5.3 second step — exchange a one-time code for a reset token.
+   *
+   * Deliberately does not change the password itself. The token it returns is
+   * the same credential the existing reset-password endpoint already accepts,
+   * so the half of recovery that was hardened earlier — single use, expiry,
+   * revoke-every-session — is reused rather than reimplemented alongside it.
+   *
+   * Every failure is the identical error: wrong code, expired code, no code,
+   * too many guesses, and unknown account are indistinguishable. Separating
+   * them would say whether the number is registered, which is precisely what
+   * the endpoint that issued the code refuses to say.
+   */
+  async verifyResetCode(phone: string, code: string): Promise<string> {
+    const startedAt = Date.now()
+    try {
+      return await this.exchangeCodeForToken(phone, code)
+    } finally {
+      const remaining = this.floorMs - (Date.now() - startedAt)
+      if (remaining > 0) await sleep(remaining)
+    }
+  }
+
+  private async exchangeCodeForToken(phone: string, code: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({ where: { phone } })
+
+    if (!user || !user.isActive) {
+      // Same argon2 cost a real verify would pay, so "no such account" cannot be
+      // separated from "wrong code" by a stopwatch. The floor above covers the
+      // gross difference; this covers the shape of it.
+      await verifyAgainstDummy(code)
+      throw invalidResetCode()
+    }
+
+    const otp = await this.prisma.passwordResetOtp.findFirst({
+      where: { userId: user.id, consumedAt: null, expiresAt: { gt: new Date(this.now()) } },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    if (!otp) {
+      await verifyAgainstDummy(code)
+      throw invalidResetCode()
+    }
+
+    /**
+     * Spend the attempt before checking it.
+     *
+     * A six-digit code is a million guesses, which is minutes of work if they
+     * are free. Incrementing first means a request that dies mid-verify — a
+     * dropped connection, a crash — costs the attacker an attempt rather than
+     * granting a free one, and a conditional update makes concurrent guesses
+     * serialise on the row instead of all reading the same count.
+     */
+    const spent = await this.prisma.passwordResetOtp.updateMany({
+      where: { id: otp.id, consumedAt: null, attemptCount: { lt: OTP_MAX_ATTEMPTS } },
+      data: { attemptCount: { increment: 1 } },
+    })
+
+    if (spent.count === 0) {
+      // Budget exhausted. Burn the code outright rather than leaving it to age
+      // out, so an attacker cannot keep probing a code they have already failed.
+      await this.prisma.passwordResetOtp.updateMany({
+        where: { id: otp.id, consumedAt: null },
+        data: { consumedAt: new Date(this.now()) },
+      })
+      await verifyAgainstDummy(code)
+      throw invalidResetCode()
+    }
+
+    if (!(await verifyPassword(code, otp.codeHash))) throw invalidResetCode()
+
+    const token = randomBytes(32).toString('base64url')
+
+    // One transaction: the code must be spent and the token minted together, or
+    // a failure between them either burns a correct code for nothing or leaves
+    // a code that can be redeemed twice.
+    await this.prisma.$transaction([
+      this.prisma.passwordResetOtp.updateMany({
+        where: { id: otp.id, consumedAt: null },
+        data: { consumedAt: new Date(this.now()) },
+      }),
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          // Stored hashed: a leaked database must not yield working tokens.
+          passwordResetTokenHash: hashOpaqueToken(token),
+          passwordResetExpiresAt: new Date(this.now() + RESET_TOKEN_TTL_MS),
+        },
+      }),
+    ])
+
+    return token
   }
 
   /**

@@ -40,6 +40,23 @@ export const changePasswordSchema = z.object({
 
 export const forgotPasswordSchema = z.object({ phone })
 
+/**
+ * Shape only — never whether the code is correct.
+ *
+ * Six digits is the format the issuer produces, so anything else cannot be a
+ * code this system minted and is rejected without a database read. That is a
+ * cost saving, not a security boundary: the service answers a well-formed wrong
+ * code and a well-formed expired one identically, and this schema must not
+ * become another way to tell them apart.
+ */
+export const verifyResetCodeSchema = z.object({
+  phone,
+  code: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{6}$/, 'Enter the 6-digit code'),
+})
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'Reset token is required'),
   newPassword: z.string().min(1, 'New password is required'),
@@ -48,4 +65,5 @@ export const resetPasswordSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
+export type VerifyResetCodeInput = z.infer<typeof verifyResetCodeSchema>
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>

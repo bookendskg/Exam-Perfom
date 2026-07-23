@@ -29,6 +29,7 @@ const PUBLIC_ROUTES = [
   { method: 'post' as const, path: '/api/v1/auth/login' },
   { method: 'post' as const, path: '/api/v1/auth/refresh' },
   { method: 'post' as const, path: '/api/v1/auth/forgot-password' },
+  { method: 'post' as const, path: '/api/v1/auth/verify-reset-code' },
   { method: 'post' as const, path: '/api/v1/auth/reset-password' },
   { method: 'get' as const, path: '/api/v1/health' },
 ]
