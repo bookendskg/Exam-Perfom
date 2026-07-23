@@ -1,8 +1,16 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { ShieldCheck } from 'lucide-react'
+import { policyForRole } from '@bookends/core/password/policy'
 import { useAuth } from '../lib/auth'
 import { ApiError } from '../lib/api'
-import { Button, Card, Field, Input } from '../components/ui'
+import { Alert, Button, Card, Field } from '../components/ui'
+import { useToast } from '../components/ui/Toast'
+import { PasswordInput } from '../components/auth/PasswordInput'
+import { PasswordStrength, requirementsFor } from '../components/auth/PasswordStrength'
 
 /**
  * §7.3's forced first-login password change.
@@ -15,103 +23,147 @@ import { Button, Card, Field, Input } from '../components/ui'
 export function ChangePasswordPage() {
   const { passwordChangeRequired, user, changePassword } = useAuth()
   const navigate = useNavigate()
-  const [currentPassword, setCurrentPassword] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [fieldError, setFieldError] = useState<string | undefined>()
-  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+
+  /**
+   * Staff and admin roles have genuinely different rules (6 characters and no
+   * complexity, against 8 with an uppercase letter and a number), so the
+   * checklist has to know which one applies.
+   *
+   * Falls back to the stricter admin policy when the role is somehow unknown.
+   * Over-asking is recoverable — a password that satisfies the admin rules
+   * satisfies the staff ones too — whereas under-asking shows a completed
+   * checklist and then a rejection from the server.
+   */
+  const policy = useMemo(() => policyForRole(user?.role ?? 'admin'), [user?.role])
+
+  const schema = useMemo(
+    () =>
+      z
+        .object({
+          currentPassword: z.string().min(1, 'Enter your current password'),
+          // Mirrors the server's rules exactly, because they come from the same
+          // module the server validates with.
+          newPassword: z
+            .string()
+            .min(1, 'Choose a new password')
+            .refine(
+              (v) => requirementsFor(v, policy).every((r) => r.met),
+              'This password does not meet the requirements below'
+            ),
+          confirm: z.string().min(1, 'Re-enter your new password'),
+        })
+        .refine((v) => v.newPassword === v.confirm, {
+          message: 'The two passwords do not match',
+          // Reported on the field the user must actually correct.
+          path: ['confirm'],
+        })
+        .refine((v) => v.newPassword !== v.currentPassword, {
+          message: 'Choose a password different from your current one',
+          path: ['newPassword'],
+        }),
+    [policy]
+  )
+
+  type FormValues = z.infer<typeof schema>
+
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setFocus,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    mode: 'onTouched',
+    defaultValues: { currentPassword: '', newPassword: '', confirm: '' },
+  })
+
+  // Drives the live meter below the field.
+  const newPassword = watch('newPassword') ?? ''
+
+  useEffect(() => {
+    setFocus('currentPassword')
+  }, [setFocus])
 
   // Reachable only while the gate is up, or for a signed-in user changing it
   // by choice. Otherwise there is nothing to change.
   if (!passwordChangeRequired && !user) return <Navigate to="/login" replace />
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setFieldError(undefined)
-
-    if (newPassword !== confirm) {
-      setFieldError('The two passwords do not match')
-      return
-    }
-
-    setBusy(true)
+  const onSubmit = async (values: FormValues) => {
     try {
-      await changePassword(currentPassword, newPassword)
+      await changePassword(values.currentPassword, values.newPassword)
+      toast.success('Password changed', 'Your other sessions have been signed out.')
       navigate('/')
     } catch (err) {
       if (err instanceof ApiError) {
-        // §7.4's policy failures come back as field details; show them where
-        // the user typed rather than as a generic banner.
-        setFieldError(err.detailFor('newPassword'))
-        setError(err.detailFor('newPassword') ? null : err.message)
+        /**
+         * The API answers a wrong current password with a `currentPassword`
+         * detail and a policy failure with `newPassword` details. Routing each
+         * to its own field is what makes the message actionable — before the
+         * server started naming the field correctly, none of this was reachable
+         * and every failure showed one generic banner.
+         */
+        const current = err.detailFor('currentPassword')
+        const next = err.detailFor('newPassword')
+
+        if (current) setError('currentPassword', { message: current })
+        if (next) setError('newPassword', { message: next })
+        if (!current && !next) setError('root', { message: err.message })
       } else {
-        setError('Could not change the password')
+        setError('root', { message: 'Could not reach the server. Please try again.' })
       }
-    } finally {
-      setBusy(false)
     }
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-stone-100 px-4">
-      <div className="w-full max-w-sm">
+    <main className="grid min-h-screen place-items-center bg-surface-container px-4 py-10">
+      <div className="w-full max-w-sm motion-safe:animate-fade-in">
         <div className="mb-8 text-center">
-          <div className="text-lg font-semibold tracking-tight text-brand-700">BOOKENDS</div>
-          <div className="mt-1 text-sm text-stone-500">Choose a new password</div>
+          <div className="text-headline-sm font-semibold tracking-tight text-primary">BOOKENDS</div>
+          <p className="mt-1 text-body-sm text-on-surface-variant">Choose a new password</p>
         </div>
 
-        <Card className="p-6">
+        <Card className="p-6 sm:p-8">
           {passwordChangeRequired && (
-            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <Alert tone="warning" className="mb-5">
               You must change your password before you can continue.
-            </div>
+            </Alert>
           )}
 
-          <form onSubmit={submit} className="space-y-4">
-            <Field label="Current password">
-              <Input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
-            </Field>
-
-            <Field label="New password" error={fieldError}>
-              <Input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            </Field>
-
-            <Field label="Confirm new password">
-              <Input
-                type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            </Field>
-
-            {error && (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                {error}
-              </div>
+          <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-4">
+            {errors.root && (
+              <Alert tone="danger" className="motion-safe:animate-slide-up">
+                {errors.root.message}
+              </Alert>
             )}
 
-            <Button type="submit" disabled={busy} className="w-full">
-              {busy ? 'Saving…' : 'Change password'}
+            <Field label="Current password" error={errors.currentPassword?.message} required>
+              <PasswordInput {...register('currentPassword')} autoComplete="current-password" />
+            </Field>
+
+            <Field label="New password" error={errors.newPassword?.message} required>
+              <PasswordInput {...register('newPassword')} autoComplete="new-password" />
+            </Field>
+
+            <PasswordStrength password={newPassword} policy={policy} />
+
+            <Field label="Confirm new password" error={errors.confirm?.message} required>
+              <PasswordInput {...register('confirm')} autoComplete="new-password" />
+            </Field>
+
+            <Button
+              type="submit"
+              loading={isSubmitting}
+              icon={<ShieldCheck aria-hidden="true" className="h-4 w-4" />}
+              className="w-full justify-center"
+            >
+              {isSubmitting ? 'Saving…' : 'Change password'}
             </Button>
           </form>
         </Card>
       </div>
-    </div>
+    </main>
   )
 }

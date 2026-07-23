@@ -4,7 +4,9 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { ThemeProvider } from './theme/ThemeProvider'
 import { AppShell } from './components/layout/AppShell'
 import { Spinner } from './components/ui'
+import { ToastProvider } from './components/ui/Toast'
 import { LoginPage } from './pages/LoginPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { EmployeesPage } from './pages/EmployeesPage'
@@ -41,6 +43,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
       <Route
         path="/"
@@ -98,11 +101,17 @@ function AppRoutes() {
 export function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </BrowserRouter>
+      {/*
+        Outside AuthProvider, so a toast raised while signing out survives the
+        auth state change that unmounts the screen which raised it.
+      */}
+      <ToastProvider>
+        <BrowserRouter>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </BrowserRouter>
+      </ToastProvider>
     </ThemeProvider>
   )
 }

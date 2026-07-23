@@ -1,4 +1,4 @@
-import { createContext, useContext, useId } from 'react'
+import { createContext, forwardRef, useContext, useId } from 'react'
 import type {
   InputHTMLAttributes,
   ReactNode,
@@ -104,25 +104,41 @@ const controlClasses = cn(
   'disabled:cursor-not-allowed disabled:bg-surface-container disabled:opacity-60'
 )
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...useFieldProps()}
-      {...props}
-      className={cn(controlClasses, 'h-10 px-3 text-body-sm', className)}
-    />
-  )
-}
+/**
+ * Refs are forwarded on every control.
+ *
+ * React Hook Form's `register()` hands back a `ref` and uses it to read the
+ * value, focus the first invalid field, and reset the form. A function
+ * component silently drops that ref — the form still renders, so the omission
+ * shows up not as an error but as validation that never fires on the right
+ * field. Forwarding is what makes these usable with a form library at all.
+ */
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function Input({ className, ...props }, ref) {
+    return (
+      <input
+        {...useFieldProps()}
+        {...props}
+        ref={ref}
+        className={cn(controlClasses, 'h-10 px-3 text-body-sm', className)}
+      />
+    )
+  }
+)
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export const Textarea = forwardRef<
+  HTMLTextAreaElement,
+  TextareaHTMLAttributes<HTMLTextAreaElement>
+>(function Textarea({ className, ...props }, ref) {
   return (
     <textarea
       {...useFieldProps()}
       {...props}
+      ref={ref}
       className={cn(controlClasses, 'min-h-[5rem] px-3 py-2 text-body-sm', className)}
     />
   )
-}
+})
 
 export interface SelectOption {
   value: string
@@ -137,15 +153,15 @@ export interface SelectOption {
  * correct keyboard behaviour, mobile pickers and screen-reader support for
  * free — worth more here than a styled popup.
  */
-export function Select({
-  options,
-  className,
-  ...props
-}: SelectHTMLAttributes<HTMLSelectElement> & { options: SelectOption[] }) {
+export const Select = forwardRef<
+  HTMLSelectElement,
+  SelectHTMLAttributes<HTMLSelectElement> & { options: SelectOption[] }
+>(function Select({ options, className, ...props }, ref) {
   return (
     <select
       {...useFieldProps()}
       {...props}
+      ref={ref}
       className={cn(
         controlClasses,
         'h-10 cursor-pointer appearance-none bg-no-repeat px-3 pr-9 text-body-sm',
@@ -163,4 +179,4 @@ export function Select({
       ))}
     </select>
   )
-}
+})

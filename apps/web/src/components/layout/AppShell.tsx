@@ -4,6 +4,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { ClipboardCheck, FileQuestion, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react'
 import { allowed, useAuth, type Role } from '../../lib/auth'
 import { cn } from '../../lib/cn'
+import { useToast } from '../ui/Toast'
 import { ThemeToggle } from './ThemeToggle'
 
 interface NavItem {
@@ -100,6 +101,7 @@ function NavItems({ role, onNavigate }: { role: Role | undefined; onNavigate?: (
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth()
+  const toast = useToast()
   const navigate = useNavigate()
   const location = useLocation()
   const title = usePageTitle()
@@ -138,7 +140,13 @@ export function AppShell({ children }: { children: ReactNode }) {
    * previous sign-out. `logout` never rejects, so this always reaches /login.
    */
   const signOut = () => {
-    void logout().then(() => navigate('/login'))
+    void logout().then(() => {
+      navigate('/login')
+      // Raised after navigating, and from a provider mounted above the router,
+      // so it survives this screen unmounting. Sign-out is otherwise silent —
+      // the user lands on a login form with no confirmation that it worked.
+      toast.success('Signed out', 'Your session has been ended on this device.')
+    })
   }
 
   const sidebarBody = (onNavigate?: () => void) => (
