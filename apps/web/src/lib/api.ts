@@ -76,13 +76,80 @@ export interface Result<T> {
   meta?: PageMeta
 }
 
+/**
+ * Endpoints that must never trigger a refresh attempt.
+ *
+ * Refreshing in response to a 401 from any of these is either meaningless or a
+ * loop: `/auth/refresh` failing IS the signal that the session is over, and the
+ * unauthenticated endpoints have no session to renew in the first place.
+ */
+const NEVER_REFRESH = [
+  '/auth/refresh',
+  '/auth/login',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+]
+
+/**
+ * The in-flight refresh, shared by every caller.
+ *
+ * A dashboard fires several requests at once, so an expired token produces a
+ * burst of simultaneous 401s. Without this, each one would start its own
+ * refresh — and because the API rotates the refresh token on every use and
+ * treats a replayed one as theft, the parallel rotations would race and could
+ * revoke the very session they were trying to save. One refresh, shared.
+ */
+let refreshInFlight: Promise<boolean> | null = null
+
+async function performRefresh(): Promise<boolean> {
+  try {
+    const res = await fetch(new URL('/api/v1/auth/refresh', window.location.origin), {
+      method: 'POST',
+      // The refresh token itself is never touched here — it rides in an
+      // HttpOnly cookie the browser attaches and JavaScript cannot read. The
+      // empty JSON body is simply what the endpoint's validator expects.
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      credentials: 'same-origin',
+    })
+    if (!res.ok) return false
+
+    const envelope = (await res.json().catch(() => null)) as Envelope<{
+      accessToken?: string
+    }> | null
+    const next = envelope?.data?.accessToken
+    if (typeof next !== 'string' || next.length === 0) return false
+
+    tokenStore.set(next)
+    return true
+  } catch {
+    // Offline or the request was aborted. Indistinguishable from a dead
+    // session here, and treating it as "not refreshed" fails safe.
+    return false
+  }
+}
+
+/** Refreshes the access token, collapsing concurrent callers onto one request. */
+function refreshAccessToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight
+
+  const attempt = performRefresh().finally(() => {
+    // Guarded so a slow attempt cannot clear a newer one that replaced it.
+    if (refreshInFlight === attempt) refreshInFlight = null
+  })
+  refreshInFlight = attempt
+  return attempt
+}
+
 export async function request<T>(
   path: string,
   options: {
     method?: string
     body?: unknown
     query?: Record<string, string | number | undefined>
-  } = {}
+  } = {},
+  /** Internal: false on the retry, so a request is only ever replayed once. */
+  mayRefresh = true
 ): Promise<Result<T>> {
   const url = new URL(`/api/v1${path}`, window.location.origin)
   for (const [key, value] of Object.entries(options.query ?? {})) {
@@ -96,6 +163,7 @@ export async function request<T>(
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
+    credentials: 'same-origin',
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   })
 
@@ -109,8 +177,28 @@ export async function request<T>(
      * change is done. Without handling it here, every screen would render an
      * inscrutable 403 and the user would have no way to get past it.
      */
-    if (error.code === 'PASSWORD_CHANGE_REQUIRED') onPasswordChangeRequired?.()
-    else if (res.status === 401) {
+    if (error.code === 'PASSWORD_CHANGE_REQUIRED') {
+      onPasswordChangeRequired?.()
+      throw new ApiError(res.status, error)
+    }
+
+    if (res.status === 401) {
+      /**
+       * The access token lives 15 minutes; the refresh cookie lives 7 days.
+       * Before this, a 401 ended the session outright — so the panel bounced
+       * the user to the login screen every quarter of an hour despite a
+       * perfectly good refresh token sitting in the cookie jar.
+       *
+       * Now: renew once, replay the original request, and only give up if the
+       * renewal itself fails. `mayRefresh` is false on the replay, so a token
+       * that is genuinely dead ends the session rather than looping.
+       */
+      if (mayRefresh && !NEVER_REFRESH.includes(path)) {
+        const renewed = await refreshAccessToken()
+        if (renewed) return request<T>(path, options, false)
+      }
+
+      // Session is genuinely over — expired, revoked, or idled out.
       tokenStore.clear()
       onUnauthenticated?.()
     }
