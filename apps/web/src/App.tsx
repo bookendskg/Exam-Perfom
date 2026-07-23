@@ -14,6 +14,7 @@ import { QuestionsPage } from './pages/QuestionsPage'
 import { ExamsPage } from './pages/ExamsPage'
 import { GradingPage } from './pages/GradingPage'
 import { GradeAttemptPage } from './pages/GradeAttemptPage'
+import { ProfilePage } from './pages/ProfilePage'
 
 /**
  * The gate every screen sits behind.
@@ -90,6 +91,14 @@ function AppRoutes() {
         element={
           <Protected>
             <GradeAttemptPage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <Protected>
+            <ProfilePage />
           </Protected>
         }
       />

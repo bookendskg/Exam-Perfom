@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { ClipboardCheck, FileQuestion, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react'
+import {
+  ClipboardCheck,
+  FileQuestion,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  UserCircle,
+  Users,
+  X,
+} from 'lucide-react'
 import { allowed, useAuth, type Role } from '../../lib/auth'
 import { cn } from '../../lib/cn'
 import { useToast } from '../ui/Toast'
@@ -21,6 +30,7 @@ const NAV: NavItem[] = [
   { to: '/questions', label: 'Questions', section: 'questions', Icon: FileQuestion },
   { to: '/exams', label: 'Exams', section: 'exams', Icon: ClipboardCheck },
   { to: '/grading', label: 'Grading', section: 'grading', Icon: ClipboardCheck },
+  { to: '/profile', label: 'Profile', section: 'profile', Icon: UserCircle },
 ]
 
 const ROLE_LABEL: Record<Role, string> = {

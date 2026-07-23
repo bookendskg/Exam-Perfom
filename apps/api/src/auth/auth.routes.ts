@@ -243,6 +243,74 @@ export function buildAuthRouter(deps: Deps) {
     }
   })
 
+  /**
+   * GET /api/v1/auth/profile — the signed-in user's own account, for display.
+   *
+   * Separate from /me on purpose. /me is on the session-restore path and runs
+   * on every page load; it answers "who is this and what may they do" and is
+   * deliberately all identifiers, no joins. This answers "what should we show
+   * them about themselves", which needs the outlet, department and designation
+   * names resolved — three joins nobody should pay for on every restore.
+   *
+   * Everything is scoped to the caller's own id, so there is no scope check to
+   * make: a user reading their own record is the only thing this can express.
+   */
+  router.get('/profile', requireAuth, authenticatedLimiter(30), (req, res, next) => {
+    void (async () => {
+      try {
+        const principal = requirePrincipal(req)
+        const user = await prisma.user.findUnique({
+          where: { id: principal.userId },
+          select: {
+            phone: true,
+            email: true,
+            role: true,
+            lastLoginAt: true,
+            createdAt: true,
+            passwordChangedAt: true,
+            // Admin and super_admin accounts are not staff and have no employee
+            // record at all, so every field behind this is optional.
+            employee: {
+              select: {
+                firstName: true,
+                lastName: true,
+                employeeCode: true,
+                joiningDate: true,
+                outlet: { select: { name: true } },
+                department: { select: { name: true } },
+                designation: { select: { name: true } },
+              },
+            },
+          },
+        })
+
+        // The session resolved a moment ago, so this is all but unreachable —
+        // it means the account was deleted mid-request.
+        if (!user) throw ApiError.unauthenticated()
+
+        const { employee } = user
+        res.json(
+          ok({
+            phone: user.phone,
+            email: user.email,
+            role: user.role,
+            name: employee ? `${employee.firstName} ${employee.lastName}` : null,
+            employeeCode: employee?.employeeCode ?? null,
+            outlet: employee?.outlet.name ?? null,
+            department: employee?.department.name ?? null,
+            designation: employee?.designation.name ?? null,
+            joinedAt: employee?.joiningDate ?? null,
+            lastLoginAt: user.lastLoginAt,
+            passwordChangedAt: user.passwordChangedAt,
+            createdAt: user.createdAt,
+          })
+        )
+      } catch (err) {
+        next(err)
+      }
+    })()
+  })
+
   // Only these two are consumed (app.ts). `tokens`, `sessions` and `auth` were
   // also returned and used by nobody.
   return { router, requireAuth }

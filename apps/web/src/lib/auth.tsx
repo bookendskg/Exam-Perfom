@@ -224,6 +224,10 @@ export const CAN: Record<string, Role[]> = {
   exams: ['super_admin', 'admin', 'outlet_manager', 'trainer', 'hr'],
   grading: ['super_admin', 'admin', 'outlet_manager', 'trainer'],
   organisation: ['super_admin', 'admin', 'outlet_manager', 'trainer', 'hr', 'staff'],
+  // Everyone has an account, so everyone can see their own. Listed explicitly
+  // rather than borrowing `organisation`, so narrowing that one later cannot
+  // accidentally hide a user's own profile from them.
+  profile: ['super_admin', 'admin', 'outlet_manager', 'trainer', 'hr', 'staff'],
 }
 
 export function allowed(section: keyof typeof CAN, role: Role | undefined): boolean {
