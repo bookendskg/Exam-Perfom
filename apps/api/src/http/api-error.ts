@@ -28,7 +28,11 @@ export class ApiError extends Error {
    * enumerate which of the 300 staff numbers are registered.
    */
   static invalidCredentials() {
-    return new ApiError(401, 'INVALID_CREDENTIALS', 'Invalid phone number or password')
+    // Identifier-neutral: the panel signs in with an email, the staff app with
+    // a phone, and both reach this. The wording must not name one and confuse
+    // the other, and must stay identical across every failure path so it cannot
+    // be used to tell a real account from an unknown one.
+    return new ApiError(401, 'INVALID_CREDENTIALS', 'Invalid credentials')
   }
 
   static unauthenticated(message = 'Authentication required') {

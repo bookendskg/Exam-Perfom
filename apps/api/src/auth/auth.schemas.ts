@@ -11,20 +11,35 @@ const phone = z
   .min(6, 'Phone number is required')
   .max(15, 'Phone number is too long')
 
-export const loginSchema = z.object({
-  phone,
-  // No length rule here: rejecting a short password at the schema would tell an
-  // attacker the policy before authentication, and legitimate short passwords
-  // predate any policy change. The stored hash decides.
-  password: z.string().min(1, 'Password is required'),
-  deviceInfo: z
-    .object({
-      model: z.string().max(100).optional(),
-      osVersion: z.string().max(50).optional(),
-      appVersion: z.string().max(50).optional(),
-    })
-    .optional(),
-})
+/**
+ * Login accepts an email OR a phone number.
+ *
+ * The web management panel signs in with email; the staff Android app keeps
+ * sending a phone number (staff have no email). Exactly one is required — the
+ * refine below — and the service resolves whichever was given.
+ */
+export const loginSchema = z
+  .object({
+    phone: phone.optional(),
+    email: z.string().trim().email('Enter a valid email address').max(255).optional(),
+    // No length rule on the password: rejecting a short one at the schema would
+    // tell an attacker the policy before authentication, and legitimate short
+    // passwords predate any policy change. The stored hash decides.
+    password: z.string().min(1, 'Password is required'),
+    deviceInfo: z
+      .object({
+        model: z.string().max(100).optional(),
+        osVersion: z.string().max(50).optional(),
+        appVersion: z.string().max(50).optional(),
+      })
+      .optional(),
+  })
+  .refine((v) => Boolean(v.email) || Boolean(v.phone), {
+    // Addressed to `email` because the panel — the only client a human fills in
+    // by hand — collects an email; the app sends a phone programmatically.
+    message: 'Enter your email',
+    path: ['email'],
+  })
 
 export const refreshSchema = z.object({
   // Optional: the web app sends it as an HttpOnly cookie instead (§7.2).

@@ -47,7 +47,7 @@ interface AuthState {
   loading: boolean
   /** Set when the API says a password change is outstanding (§7.3). */
   passwordChangeRequired: boolean
-  login: (phone: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   /** Async because it revokes the session server-side before clearing local state. */
   logout: () => Promise<void>
@@ -159,8 +159,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const login = useCallback(async (phone: string, password: string) => {
-    const { data } = await api.post<LoginResponse>('/auth/login', { phone, password })
+  const login = useCallback(async (email: string, password: string) => {
+    // The panel signs in with email; the staff Android app sends a phone to the
+    // same endpoint. Only the identifier field differs.
+    const { data } = await api.post<LoginResponse>('/auth/login', { email, password })
     tokenStore.set(data.accessToken)
     // A previous logout latched refreshing off; this session is entitled to it.
     resumeRefreshing()

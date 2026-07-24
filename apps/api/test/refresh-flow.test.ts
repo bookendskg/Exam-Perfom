@@ -115,7 +115,11 @@ describe('validate() treats a missing body as empty', () => {
 
     expect(res.status).toBe(400)
     const fields = (res.body.error.details as Array<{ field: string }>).map((d) => d.field)
-    expect(fields).toContain('phone')
+    // The Express-5 fix: an empty body names the missing field (`password`)
+    // rather than producing one opaque "(root): Required". The identifier
+    // requirement (email-or-phone) surfaces once a password is present — the
+    // refine only runs after the object's own fields parse — and is covered in
+    // login-email.test.ts.
     expect(fields).toContain('password')
     expect(fields).not.toContain('(root)')
   })

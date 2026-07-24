@@ -101,35 +101,54 @@ export class AuthService {
   /**
    * §5.3 POST /auth/login.
    *
-   * Every failure path returns the identical INVALID_CREDENTIALS — unknown
-   * phone, wrong password, and deactivated account are indistinguishable to a
-   * caller. Anything else enumerates which of the ~300 staff numbers exist.
+   * The identifier is an email (web panel) or a phone number (staff app);
+   * exactly one is supplied. Every failure path returns the identical
+   * INVALID_CREDENTIALS — unknown identifier, wrong password, and deactivated
+   * account are indistinguishable to a caller. Anything else enumerates which
+   * accounts exist.
+   *
+   * The lockout is keyed on the identifier as typed, so brute-forcing an email
+   * and brute-forcing a phone are counted separately — which is correct, since
+   * each is a distinct thing an attacker has to know and hammer.
    */
-  async login(phone: string, password: string, device: DeviceContext): Promise<IssuedSession> {
+  async login(
+    identifier: { email?: string; phone?: string },
+    password: string,
+    device: DeviceContext
+  ): Promise<IssuedSession> {
     const client = ipKey(device.ipAddress)
+
+    // Emails are stored lowercased, so the lookup and the lockout key must be
+    // too, or "User@x.com" and "user@x.com" would be treated as different
+    // accounts and different lockout buckets.
+    const email = identifier.email?.trim().toLowerCase()
+    const lockoutKey = email ?? identifier.phone
+    if (!lockoutKey) throw ApiError.invalidCredentials()
 
     // Before any argon2 work: a locked identifier must not be able to spend
     // 19 MiB of hashing per request, or the lockout becomes a CPU amplifier.
-    await this.lockout.assertNotLocked(phone, client)
+    await this.lockout.assertNotLocked(lockoutKey, client)
 
-    const user = await this.prisma.user.findUnique({ where: { phone } })
+    const user = email
+      ? await this.prisma.user.findUnique({ where: { email } })
+      : await this.prisma.user.findUnique({ where: { phone: identifier.phone! } })
 
     if (!user) {
       // Burn the same CPU a real argon2 verify would. Without this, "unknown
-      // phone" returns in ~1ms and "wrong password" in ~50ms, and the gap is a
-      // user-enumeration oracle.
+      // identifier" returns in ~1ms and "wrong password" in ~50ms, and the gap
+      // is a user-enumeration oracle.
       await verifyAgainstDummy(password)
-      await this.lockout.recordFailure(phone, client)
+      await this.lockout.recordFailure(lockoutKey, client)
       throw ApiError.invalidCredentials()
     }
 
     const valid = await verifyPassword(password, user.passwordHash)
     if (!valid || !user.isActive) {
-      await this.lockout.recordFailure(phone, client)
+      await this.lockout.recordFailure(lockoutKey, client)
       throw ApiError.invalidCredentials()
     }
 
-    await this.lockout.clear(phone)
+    await this.lockout.clear(lockoutKey)
 
     const issued = await this.sessions.issue(user.id, user.role as Role, device)
     await this.prisma.user.update({

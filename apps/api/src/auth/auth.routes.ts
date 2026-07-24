@@ -84,7 +84,7 @@ export function buildAuthRouter(deps: Deps) {
         try {
           const body = req.valid!.body as LoginInput
           const issued = await auth.login(
-            body.phone,
+            { email: body.email, phone: body.phone },
             body.password,
             deviceFrom(req, body.deviceInfo)
           )

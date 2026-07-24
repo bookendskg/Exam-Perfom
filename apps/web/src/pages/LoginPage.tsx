@@ -10,34 +10,30 @@ import { Alert, Button, Card, Field, Input } from '../components/ui'
 import { PasswordInput } from '../components/auth/PasswordInput'
 
 /**
- * Mirrors what the API accepts, so an obviously malformed number is caught
- * before it costs a round trip — and, more importantly, before it costs one of
- * the five attempts that lock the account for fifteen minutes.
+ * Mirrors what the API accepts, so an obviously malformed email is caught before
+ * it costs a round trip — and, more importantly, before it costs one of the five
+ * attempts that lock the account for fifteen minutes.
  *
- * Deliberately permissive about format beyond length: the API is the authority
- * on which numbers exist, and a client-side rule that is stricter than the
- * server's would reject a legitimate user with no way to appeal.
+ * The management panel signs in with email. Staff sign in on the Android app
+ * with a phone number, which posts to the same endpoint — that path is
+ * unaffected by this form.
  */
 const schema = z.object({
-  phone: z
-    .string()
-    .min(1, 'Enter your phone number')
-    .regex(/^[0-9+\-\s()]+$/, 'Use digits only')
-    .refine((v) => v.replace(/\D/g, '').length >= 10, 'Enter a complete phone number'),
+  email: z.string().trim().min(1, 'Enter your email').email('Enter a valid email address'),
   password: z.string().min(1, 'Enter your password'),
   rememberMe: z.boolean(),
 })
 
 type FormValues = z.infer<typeof schema>
 
-/** Where the phone number is kept between visits when "Remember me" is ticked. */
-const REMEMBERED_PHONE = 'bookends.rememberedPhone'
+/** Where the email is kept between visits when "Remember me" is ticked. */
+const REMEMBERED_EMAIL = 'bookends.rememberedEmail'
 
 export function LoginPage() {
   const { user, login, passwordChangeRequired } = useAuth()
   const navigate = useNavigate()
 
-  const remembered = localStorage.getItem(REMEMBERED_PHONE)
+  const remembered = localStorage.getItem(REMEMBERED_EMAIL)
 
   const {
     register,
@@ -51,15 +47,15 @@ export function LoginPage() {
     // types. Validating on every keystroke from the start would mark a field
     // invalid before it has been finished.
     mode: 'onTouched',
-    defaultValues: { phone: remembered ?? '', password: '', rememberMe: Boolean(remembered) },
+    defaultValues: { email: remembered ?? '', password: '', rememberMe: Boolean(remembered) },
   })
 
   /**
    * Focus what the user still has to fill in. Returning visitors have their
-   * number already, so sending them to the top would make them tab past it.
+   * email already, so sending them to the top would make them tab past it.
    */
   useEffect(() => {
-    setFocus(remembered ? 'password' : 'phone')
+    setFocus(remembered ? 'password' : 'email')
   }, [setFocus, remembered])
 
   if (passwordChangeRequired) return <Navigate to="/change-password" replace />
@@ -67,29 +63,30 @@ export function LoginPage() {
 
   const onSubmit = async (values: FormValues) => {
     try {
-      await login(values.phone, values.password)
+      await login(values.email, values.password)
 
-      // Only the number, never the password. Persisted after success so a typo
+      // Only the email, never the password. Persisted after success so a typo
       // is not what gets remembered.
-      if (values.rememberMe) localStorage.setItem(REMEMBERED_PHONE, values.phone)
-      else localStorage.removeItem(REMEMBERED_PHONE)
+      if (values.rememberMe) localStorage.setItem(REMEMBERED_EMAIL, values.email)
+      else localStorage.removeItem(REMEMBERED_EMAIL)
 
       navigate('/')
     } catch (err) {
       /**
-       * §7.2 returns the same message for a wrong number, a wrong password and
-       * a disabled account, precisely so nobody can enumerate which of the 300
-       * staff numbers are registered. Showing it verbatim keeps that intact.
+       * §7.2 returns the same message for a wrong email, a wrong password and a
+       * disabled account, precisely so nobody can enumerate which accounts
+       * exist. Showing it verbatim keeps that intact.
        *
        * Attached to the form root rather than to a field for the same reason —
-       * marking `phone` invalid would say the number was the part that was
-       * wrong, which is exactly what the API declines to reveal.
+       * marking `email` invalid would say the email was the part that was wrong,
+       * which is exactly what the API declines to reveal.
        */
-      const locked = err instanceof ApiError && err.status === 429
+      // The API already phrases every case safely — invalid credentials,
+      // account locked, password-change-required — so its message is shown
+      // verbatim; only a transport failure (no ApiError) needs our own wording.
       setError('root', {
-        message: locked
-          ? err.message
-          : err instanceof ApiError
+        message:
+          err instanceof ApiError
             ? err.message
             : 'Could not reach the server. Check your connection and try again.',
       })
@@ -123,14 +120,13 @@ export function LoginPage() {
               </Alert>
             )}
 
-            <Field label="Phone number" error={errors.phone?.message} required>
+            <Field label="Email" error={errors.email?.message} required>
               <Input
-                {...register('phone')}
-                // A hint, not a real-looking number — a "9876543210" placeholder
-                // is indistinguishable from a typed value on an empty field.
-                placeholder="Your 10-digit number"
+                {...register('email')}
+                type="email"
+                placeholder="you@example.com"
                 autoComplete="username"
-                inputMode="numeric"
+                inputMode="email"
               />
             </Field>
 

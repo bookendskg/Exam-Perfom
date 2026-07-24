@@ -553,7 +553,9 @@ model LoginAttempt {
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
   /// The identifier that was attempted, normalised. Not necessarily a real user.
-  phone String @db.VarChar(15)
+  /// Holds an email or a phone number — login accepts either — so it is sized
+  /// for an email, not the 15 chars a phone needs.
+  identifier String @db.VarChar(255)
   /// Normalised client key (IPv4 whole, IPv6 collapsed to /64) — see rate-limit.ts.
   ipKey String @map("ip_key") @db.VarChar(64)
   /// Which credential check failed, so change-password abuse is distinguishable.
@@ -561,8 +563,8 @@ model LoginAttempt {
 
   attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz(6)
 
-  @@index([phone, attemptedAt])
-  @@index([phone, ipKey, attemptedAt])
+  @@index([identifier, attemptedAt])
+  @@index([identifier, ipKey, attemptedAt])
   @@index([attemptedAt])
   @@map("login_attempts")
 }

@@ -121,7 +121,7 @@ describe('LockoutService', () => {
 
     await service().recordFailure(PHONE, IP_A)
 
-    const rows = await prisma.loginAttempt.count({ where: { phone: PHONE } })
+    const rows = await prisma.loginAttempt.count({ where: { identifier: PHONE } })
     expect(rows).toBe(1)
   })
 })
