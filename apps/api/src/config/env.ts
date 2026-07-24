@@ -68,6 +68,25 @@ const schema = z
     SESSION_STORE: z.enum(['postgres', 'memory']).default('postgres'),
     SESSION_IDLE_TTL_STAFF_SECONDS: z.coerce.number().int().positive().default(1800),
     SESSION_IDLE_TTL_ADMIN_SECONDS: z.coerce.number().int().positive().default(7200),
+
+    /**
+     * SMTP, for password-reset code delivery. All optional: when SMTP_HOST is
+     * unset the API falls back to the dev file sink (development) or refuses to
+     * deliver (production), exactly as before this existed — so no environment
+     * that was working stops working by omission.
+     */
+    SMTP_HOST: z.string().optional(),
+    SMTP_PORT: z.coerce.number().int().positive().default(587),
+    // Implicit TLS from the first byte (port 465). Leave false for STARTTLS on
+    // 587, which is what most providers and every test inbox use.
+    SMTP_SECURE: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    SMTP_USER: z.string().optional(),
+    SMTP_PASSWORD: z.string().optional(),
+    // The From: address. Required alongside a host — see superRefine.
+    SMTP_FROM: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     const isProd = env.NODE_ENV === 'production'
@@ -120,13 +139,35 @@ const schema = z
         message: 'SESSION_STORE=memory is not permitted in production; use postgres',
       })
     }
+
+    // A transport with a host but no From: address fails at send time with a
+    // cryptic "no recipients"/"envelope from" error. Catch it at boot, where the
+    // fix is obvious, rather than on a user's password-reset attempt.
+    if (env.SMTP_HOST && !env.SMTP_FROM) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SMTP_FROM'],
+        message: 'SMTP_FROM is required when SMTP_HOST is set (the From: address for reset emails)',
+      })
+    }
   })
+
+/** The parsed SMTP settings, present only when a host was configured. */
+export interface SmtpConfig {
+  host: string
+  port: number
+  secure: boolean
+  from: string
+  auth?: { user: string; pass: string }
+}
 
 export type Config = Readonly<
   z.infer<typeof schema> & {
     isProduction: boolean
     isTest: boolean
     corsOrigins: string[]
+    /** Present when SMTP_HOST is configured; the signal to use email delivery. */
+    smtp?: SmtpConfig
   }
 >
 
@@ -141,6 +182,24 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   }
 
   const env = parsed.data
+
+  // Assembled once here so the rest of the app asks `config.smtp ?` and never
+  // re-derives "is email configured" from three separate raw fields. Auth is
+  // included only when both a user and a password are present — an authless
+  // relay (a local MailHog, some internal gateways) is legitimate.
+  const smtp: SmtpConfig | undefined = env.SMTP_HOST
+    ? {
+        host: env.SMTP_HOST,
+        port: env.SMTP_PORT,
+        secure: env.SMTP_SECURE,
+        // superRefine guarantees SMTP_FROM when SMTP_HOST is set.
+        from: env.SMTP_FROM as string,
+        ...(env.SMTP_USER && env.SMTP_PASSWORD
+          ? { auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } }
+          : {}),
+      }
+    : undefined
+
   return Object.freeze({
     ...env,
     // Test-only fallback, so unit tests need not invent a secret. Every other
@@ -152,5 +211,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: env.CORS_ORIGINS.split(',')
       .map((o) => o.trim())
       .filter(Boolean),
+    ...(smtp ? { smtp } : {}),
   })
 }

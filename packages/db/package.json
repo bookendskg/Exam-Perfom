@@ -26,7 +26,8 @@
     "studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
     "postinstall": "prisma generate",
-    "demo": "tsx scripts/demo-data.ts"
+    "demo": "tsx scripts/demo-data.ts",
+    "set-email": "tsx scripts/set-user-email.ts"
   },
   "dependencies": {
     "@bookends/core": "*",

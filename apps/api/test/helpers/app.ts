@@ -22,9 +22,19 @@ import { testDb } from './db.js'
 export class RecordingDispatcher implements NotificationDispatcher {
   readonly sent: PasswordResetMessage[] = []
   failWith: Error | null = null
+  /**
+   * Emulate the email channel's contract: throw for an account with no address.
+   * Lets a route-level test exercise the real service rollback for the
+   * null-email case without standing up SMTP. Off by default so existing tests
+   * are unaffected.
+   */
+  throwOnMissingEmail = false
 
   async sendPasswordReset(message: PasswordResetMessage): Promise<void> {
     if (this.failWith) throw this.failWith
+    if (this.throwOnMissingEmail && !message.email) {
+      throw new Error('No email address on file for password reset delivery')
+    }
     this.sent.push(message)
   }
 }

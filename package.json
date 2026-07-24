@@ -30,7 +30,8 @@
     "dev": "concurrently -n api,web -c blue,magenta --kill-others-on-fail \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "npm run dev -w @bookends/api",
     "dev:web": "npm run dev -w @bookends/web",
-    "db:demo": "npm run demo -w @bookends/db"
+    "db:demo": "npm run demo -w @bookends/db",
+    "db:set-email": "npm run set-email -w @bookends/db"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

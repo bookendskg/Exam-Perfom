@@ -3,7 +3,13 @@ import { pino } from 'pino'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DevFileDispatcher, UnconfiguredDispatcher } from '../src/notifications/dispatcher.js'
+import {
+  DevFileDispatcher,
+  EmailDispatcher,
+  UnconfiguredDispatcher,
+  buildDispatcher,
+} from '../src/notifications/dispatcher.js'
+import { loadConfig } from '../src/config/env.js'
 
 /**
  * B2 — a password reset token is a password equivalent for its whole 30-minute
@@ -33,6 +39,7 @@ function capturingLogger() {
 
 const message = () => ({
   phone: '9876543210',
+  email: null,
   code: '481937',
   expiresAt: new Date('2026-01-01T00:30:00.000Z'),
 })
@@ -100,5 +107,46 @@ describe('UnconfiguredDispatcher', () => {
     await expect(new UnconfiguredDispatcher().sendPasswordReset()).rejects.toThrow(
       /not configured/i
     )
+  })
+})
+
+describe('buildDispatcher picks the channel from config', () => {
+  const base = {
+    JWT_SECRET: 'a-secret-that-is-definitely-long-enough-to-pass-32',
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+  }
+  const logger = capturingLogger()
+
+  it('uses email whenever SMTP is configured — in any environment', () => {
+    const config = loadConfig({
+      ...base,
+      NODE_ENV: 'development',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_FROM: 'no-reply@example.com',
+    })
+    expect(config.smtp).toBeDefined()
+    expect(buildDispatcher(config, logger)).toBeInstanceOf(EmailDispatcher)
+  })
+
+  it('falls back to the dev file sink in development with no SMTP', () => {
+    const config = loadConfig({ ...base, NODE_ENV: 'development' })
+    expect(config.smtp).toBeUndefined()
+    expect(buildDispatcher(config, logger)).toBeInstanceOf(DevFileDispatcher)
+  })
+
+  it('refuses to deliver in production with no SMTP, rather than dropping codes', () => {
+    const config = loadConfig({
+      ...base,
+      NODE_ENV: 'production',
+      // production needs a real store; supply one so config validates.
+      SESSION_STORE: 'postgres',
+    })
+    expect(buildDispatcher(config, logger)).toBeInstanceOf(UnconfiguredDispatcher)
+  })
+
+  it('rejects an SMTP host with no From: address at load time', () => {
+    expect(() =>
+      loadConfig({ ...base, NODE_ENV: 'development', SMTP_HOST: 'smtp.example.com' })
+    ).toThrow(/SMTP_FROM/)
   })
 })

@@ -290,7 +290,7 @@ export class AuthService {
     // very property the identical-response wording exists to provide. The
     // operator needs to know; the caller must not.
     try {
-      await this.dispatcher.sendPasswordReset({ phone, code, expiresAt })
+      await this.dispatcher.sendPasswordReset({ phone, email: user.email, code, expiresAt })
     } catch (err) {
       this.logger?.error({ err }, 'Password reset could not be delivered; code rolled back')
 
