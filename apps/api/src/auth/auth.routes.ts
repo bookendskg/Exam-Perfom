@@ -13,11 +13,13 @@ import {
   refreshSchema,
   changePasswordSchema,
   forgotPasswordSchema,
+  updateEmailSchema,
   verifyResetCodeSchema,
   resetPasswordSchema,
   type LoginInput,
   type ChangePasswordInput,
   type ForgotPasswordInput,
+  type UpdateEmailInput,
   type VerifyResetCodeInput,
   type ResetPasswordInput,
 } from './auth.schemas.js'
@@ -339,6 +341,33 @@ export function buildAuthRouter(deps: Deps) {
       }
     })()
   })
+
+  /**
+   * PATCH /api/v1/auth/profile — the caller sets their own recovery email.
+   *
+   * This is the self-service half of "everyone can recover by email": a signed-in
+   * user gives the address their reset codes should go to. The current password
+   * is required (see updateEmailSchema) because the recovery address decides
+   * where those codes land.
+   */
+  router.patch(
+    '/profile',
+    requireAuth,
+    authenticatedLimiter(10),
+    validate({ body: updateEmailSchema }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const principal = requirePrincipal(req)
+          const body = req.valid!.body as UpdateEmailInput
+          await auth.updateOwnEmail(principal.userId, body.email, body.currentPassword)
+          res.json(ok({ email: body.email.trim().toLowerCase() }))
+        } catch (err) {
+          next(err)
+        }
+      })()
+    }
+  )
 
   // Only these two are consumed (app.ts). `tokens`, `sessions` and `auth` were
   // also returned and used by nobody.

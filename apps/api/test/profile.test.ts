@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import request from 'supertest'
 import type { Application } from 'express'
-import { buildTestApp } from './helpers/app.js'
-import { truncateAll, disconnectDb } from './helpers/db.js'
+import { buildTestApp, RecordingDispatcher } from './helpers/app.js'
+import { truncateAll, disconnectDb, testDb } from './helpers/db.js'
 import { makeUser, resetOutletManagers } from './helpers/factories.js'
 
 /**
@@ -14,11 +14,13 @@ import { makeUser, resetOutletManagers } from './helpers/factories.js'
  * that the data is genuinely there, and that it is scoped to the caller alone.
  */
 let app: Application
+let dispatcher: RecordingDispatcher
 
 beforeEach(async () => {
   await truncateAll()
   await resetOutletManagers()
-  app = buildTestApp().app
+  dispatcher = new RecordingDispatcher()
+  app = buildTestApp({}, dispatcher).app
 })
 
 afterAll(async () => {
@@ -123,5 +125,76 @@ describe('GET /auth/profile', () => {
   it('refuses an unauthenticated caller', async () => {
     const res = await request(app).get('/api/v1/auth/profile')
     expect(res.status).toBe(401)
+  })
+})
+
+describe('PATCH /auth/profile — setting your own recovery email', () => {
+  const patch = (token: string, body: object) =>
+    request(app).patch('/api/v1/auth/profile').set('Authorization', `Bearer ${token}`).send(body)
+
+  it('stores the email, lowercased, when the current password is correct', async () => {
+    const { token, user } = await signIn({ role: 'admin', password: 'Password1' })
+
+    const res = await patch(token, { email: 'Me@Example.com', currentPassword: 'Password1' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+
+    const after = await testDb().user.findUniqueOrThrow({ where: { id: user.id } })
+    // Lowercased so casing cannot create a case-duplicate of an existing address.
+    expect(after.email).toBe('me@example.com')
+    // Stored unverified — nothing here proved the mailbox belongs to the user.
+    expect(after.emailVerifiedAt).toBeNull()
+  })
+
+  it('refuses without the correct current password', async () => {
+    const { token, user } = await signIn({ role: 'admin', password: 'Password1' })
+
+    const res = await patch(token, { email: 'me@example.com', currentPassword: 'wrong-password' })
+    expect(res.status).toBe(400)
+    expect((res.body.error.details as Array<{ field: string }>)[0]?.field).toBe('currentPassword')
+
+    // The email must not have changed on a failed password check.
+    const after = await testDb().user.findUniqueOrThrow({ where: { id: user.id } })
+    expect(after.email).toBeNull()
+  })
+
+  it('rejects an email already linked to another account', async () => {
+    const other = await makeUser({ role: 'admin' })
+    await testDb().user.update({
+      where: { id: other.user.id },
+      data: { email: 'taken@example.com' },
+    })
+
+    const { token } = await signIn({ role: 'admin', password: 'Password1' })
+    const res = await patch(token, { email: 'taken@example.com', currentPassword: 'Password1' })
+
+    // A unique email is what lets a reset be delivered to exactly one account.
+    expect(res.status).toBe(409)
+    expect((res.body.error.details as Array<{ field: string }>)[0]?.field).toBe('email')
+  })
+
+  it('rejects a malformed email', async () => {
+    const { token } = await signIn({ role: 'admin', password: 'Password1' })
+    const res = await patch(token, { email: 'not-an-email', currentPassword: 'Password1' })
+    expect(res.status).toBe(400)
+  })
+
+  it('refuses an unauthenticated caller', async () => {
+    const res = await request(app)
+      .patch('/api/v1/auth/profile')
+      .send({ email: 'me@example.com', currentPassword: 'x' })
+    expect(res.status).toBe(401)
+  })
+
+  it('makes the account recoverable: the code then goes to the email just set', async () => {
+    const { token, phone } = await signIn({ role: 'admin', password: 'Password1' })
+
+    // Before: no email, so an email channel has nowhere to deliver.
+    await patch(token, { email: 'recover@example.com', currentPassword: 'Password1' }).expect(200)
+
+    // The whole point — the address a user sets is where their reset code goes.
+    const res = await request(app).post('/api/v1/auth/forgot-password').send({ phone })
+    expect(res.status).toBe(200)
+    expect(dispatcher.sent).toHaveLength(1)
+    expect(dispatcher.sent[0]?.email).toBe('recover@example.com')
   })
 })

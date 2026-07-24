@@ -219,6 +219,46 @@ export class AuthService {
   }
 
   /**
+   * Sets the caller's own recovery email.
+   *
+   * Guarded by the current password (see {@link updateEmailSchema}). The address
+   * is stored unverified — `emailVerifiedAt` is cleared — because nothing here
+   * proves the mailbox belongs to the user; a later verification flow (the
+   * schema already carries the column and a token model) can set it. The reset
+   * flow uses the address regardless, which is the pragmatic trade until then.
+   */
+  async updateOwnEmail(userId: string, email: string, currentPassword: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } })
+    if (!user) throw ApiError.unauthenticated()
+
+    if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+      throw ApiError.validation('Current password is incorrect', [
+        { field: 'currentPassword', message: 'Incorrect password' },
+      ])
+    }
+
+    const normalised = email.trim().toLowerCase()
+
+    // The column is unique: one email identifies one account, which is what lets
+    // a reset be delivered unambiguously. A friendly 409 beats surfacing the raw
+    // Prisma constraint error.
+    const clash = await this.prisma.user.findFirst({
+      where: { email: normalised, NOT: { id: userId } },
+      select: { id: true },
+    })
+    if (clash) {
+      throw ApiError.conflict('That email is already in use', [
+        { field: 'email', message: 'Already linked to another account' },
+      ])
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { email: normalised, emailVerifiedAt: null },
+    })
+  }
+
+  /**
    * §5.3 POST /auth/forgot-password.
    *
    * Always resolves, whether or not the phone exists. Reporting "no such user"

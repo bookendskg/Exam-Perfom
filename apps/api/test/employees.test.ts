@@ -410,3 +410,56 @@ describe('§8.4 status transitions', () => {
     expect(suspension.metadata).toMatchObject({ from: 'active', to: 'suspended' })
   })
 })
+
+describe('email stays in sync between Employee and User (so reset can reach it)', () => {
+  const create = (token: string, over: Record<string, unknown> = {}) =>
+    request(app)
+      .post('/api/v1/employees')
+      .set('Authorization', `Bearer ${token}`)
+      .send(newEmployee(over))
+
+  it('create writes the email to User too, lowercased', async () => {
+    const token = await tokenFor({ role: 'admin' })
+    const phone = '9811111111'
+
+    const res = await create(token, { phone, email: 'Cook@Example.com' })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+
+    // User.email is where forgot-password delivers; Employee.email is the HR
+    // record. Both must carry it, or a created employee cannot self-recover.
+    const user = await testDb().user.findUniqueOrThrow({ where: { phone } })
+    expect(user.email).toBe('cook@example.com')
+  })
+
+  it('update propagates an email change to User, not just Employee', async () => {
+    const token = await tokenFor({ role: 'admin' })
+    const phone = '9822222222'
+    const created = await create(token, { phone, email: 'old@example.com' })
+
+    const res = await request(app)
+      .put(`/api/v1/employees/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: 'new@example.com' })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+
+    // The defect this pins: the PUT used to touch only Employee.email, so an
+    // admin correcting an address left reset delivering to the old one.
+    const user = await testDb().user.findUniqueOrThrow({ where: { phone } })
+    expect(user.email).toBe('new@example.com')
+  })
+
+  it('rejects an update to an email another account already owns', async () => {
+    const token = await tokenFor({ role: 'admin' })
+    await create(token, { phone: '9833333333', email: 'taken@example.com' })
+    const second = await create(token, { phone: '9844444444', email: 'free@example.com' })
+
+    const res = await request(app)
+      .put(`/api/v1/employees/${second.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: 'taken@example.com' })
+
+    // User.email is unique — a clear 409 beats the raw Prisma constraint error.
+    expect(res.status).toBe(409)
+    expect(res.body.error.details[0].field).toBe('email')
+  })
+})

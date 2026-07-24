@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { KeyRound, LogOut } from 'lucide-react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { KeyRound, LogOut, Mail } from 'lucide-react'
 import { api, ApiError } from '../lib/api'
 import { useApi } from '../lib/useApi'
 import { useAuth, type Role } from '../lib/auth'
@@ -10,11 +13,14 @@ import {
   Badge,
   Button,
   Card,
+  Field,
+  Input,
   PageHeader,
   Skeleton,
   buttonClasses,
 } from '../components/ui'
 import { useToast } from '../components/ui/Toast'
+import { PasswordInput } from '../components/auth/PasswordInput'
 
 interface Profile {
   phone: string
@@ -71,6 +77,117 @@ function Detail({ label, value }: { label: string; value: string }) {
   )
 }
 
+const emailFormSchema = z.object({
+  email: z.string().trim().min(1, 'Enter an email address').email('Enter a valid email address'),
+  currentPassword: z.string().min(1, 'Enter your current password'),
+})
+
+/**
+ * The recovery email, shown and edited in one place.
+ *
+ * This is where a user gives the address their password-reset codes go to —
+ * the self-service half of email recovery. The current password is required
+ * because this address decides where a reset lands, so the API will not change
+ * it on a merely-signed-in session; the form collects it to match.
+ */
+function RecoveryEmail({ email, onSaved }: { email: string | null; onSaved: () => void }) {
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<z.infer<typeof emailFormSchema>>({
+    resolver: zodResolver(emailFormSchema),
+    mode: 'onTouched',
+    defaultValues: { email: email ?? '', currentPassword: '' },
+  })
+
+  const open = () => {
+    reset({ email: email ?? '', currentPassword: '' })
+    setEditing(true)
+  }
+
+  const onSubmit = async (values: z.infer<typeof emailFormSchema>) => {
+    try {
+      await api.patch('/auth/profile', values)
+      toast.success('Recovery email updated', 'Password-reset codes will go here.')
+      setEditing(false)
+      onSaved()
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const emailErr = err.detailFor('email')
+        const pwErr = err.detailFor('currentPassword')
+        if (emailErr) setError('email', { message: emailErr })
+        if (pwErr) setError('currentPassword', { message: pwErr })
+        if (!emailErr && !pwErr) setError('root', { message: err.message })
+      } else {
+        setError('root', { message: 'Could not reach the server. Please try again.' })
+      }
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="rounded-lg border border-outline-variant p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Mail aria-hidden="true" className="h-4 w-4 shrink-0 text-on-surface-variant" />
+            <div className="min-w-0">
+              <p className="text-caption text-on-surface-variant">Recovery email</p>
+              <p className="truncate text-body-sm text-on-surface">
+                {email ?? 'Not set — you cannot reset your own password without it'}
+              </p>
+            </div>
+          </div>
+          <Button variant="secondary" size="sm" onClick={open}>
+            {email ? 'Change' : 'Add'}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit(onSubmit)}
+      noValidate
+      className="space-y-3 rounded-lg border border-outline-variant p-4"
+    >
+      <p className="text-body-sm font-medium text-on-surface">
+        {email ? 'Change recovery email' : 'Add a recovery email'}
+      </p>
+
+      {errors.root && <Alert tone="danger">{errors.root.message}</Alert>}
+
+      <Field label="Email address" error={errors.email?.message} required>
+        <Input
+          {...register('email')}
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+        />
+      </Field>
+
+      <Field label="Current password" error={errors.currentPassword?.message} required>
+        <PasswordInput {...register('currentPassword')} autoComplete="current-password" />
+      </Field>
+
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" loading={isSubmitting}>
+          {isSubmitting ? 'Saving…' : 'Save email'}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
 /**
  * The signed-in user's own account.
  *
@@ -85,7 +202,7 @@ export function ProfilePage() {
   const navigate = useNavigate()
   const toast = useToast()
   const [revoking, setRevoking] = useState(false)
-  const profile = useApi<Profile>('/auth/profile')
+  const profileState = useApi<Profile>('/auth/profile')
 
   /**
    * Signing out everywhere ends THIS session too — that is the point, and the
@@ -114,7 +231,7 @@ export function ProfilePage() {
       <PageHeader title="My profile" subtitle="Your account details and session controls." />
 
       <Async
-        state={profile}
+        state={profileState}
         skeleton={
           <div className="grid gap-4 lg:grid-cols-2">
             <Skeleton className="h-64 w-full" />
@@ -138,7 +255,7 @@ export function ProfilePage() {
               </div>
 
               <dl className="mt-4 divide-y divide-outline-variant border-t border-outline-variant">
-                {profile.email && <Detail label="Email" value={profile.email} />}
+                {/* Email lives in the Security card, where it can be edited. */}
                 {profile.employeeCode && (
                   <Detail label="Employee code" value={profile.employeeCode} />
                 )}
@@ -169,6 +286,8 @@ export function ProfilePage() {
               </dl>
 
               <div className="mt-5 space-y-3">
+                <RecoveryEmail email={profile.email} onSaved={profileState.reload} />
+
                 <Link
                   to="/change-password"
                   className={buttonClasses('secondary', 'md', 'w-full justify-center')}

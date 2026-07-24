@@ -38,6 +38,20 @@ export const changePasswordSchema = z.object({
   newPassword: z.string().min(1, 'New password is required'),
 })
 
+/**
+ * Setting your own recovery email.
+ *
+ * The current password is required, and that is the whole security model here:
+ * the recovery email decides where a password-reset code is delivered, so
+ * letting a merely-signed-in session change it would let a briefly-hijacked
+ * session redirect every future reset to an attacker's inbox. Re-proving the
+ * password is the same bar as changing the password itself.
+ */
+export const updateEmailSchema = z.object({
+  email: z.string().trim().email('Enter a valid email address').max(255),
+  currentPassword: z.string().min(1, 'Enter your current password'),
+})
+
 export const forgotPasswordSchema = z.object({ phone })
 
 /**
@@ -64,6 +78,7 @@ export const resetPasswordSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
+export type UpdateEmailInput = z.infer<typeof updateEmailSchema>
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
 export type VerifyResetCodeInput = z.infer<typeof verifyResetCodeSchema>
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>

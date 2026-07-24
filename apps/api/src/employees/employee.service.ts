@@ -154,11 +154,15 @@ export class EmployeeService {
 
     const passwordHash = await hashPassword(plainPassword)
 
+    // Stored lowercased so casing cannot create a second account for the same
+    // address, and so the unique constraint matches regardless of how it is typed.
+    const email = input.email ? input.email.trim().toLowerCase() : null
+
     const employee = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
           phone: input.phone,
-          email: input.email ?? null,
+          email,
           role,
           passwordHash,
           // §7.3 force change on first login. The default is derived from a
@@ -178,7 +182,7 @@ export class EmployeeService {
           firstName: input.firstName,
           lastName: input.lastName,
           phone: input.phone,
-          email: input.email ?? null,
+          email,
           photoUrl: input.photoUrl ?? null,
           dateOfBirth: input.dateOfBirth ? new Date(input.dateOfBirth) : null,
           gender: input.gender ?? null,
@@ -233,12 +237,38 @@ export class EmployeeService {
       })
     }
 
+    /**
+     * The email lives on two rows and they must not drift.
+     *
+     * `Employee.email` is the HR record; `User.email` is where a password-reset
+     * code is delivered. This route used to update only the former, so an admin
+     * correcting an employee's email silently left recovery pointing at the old
+     * address. Both are written together, and User.email — which is unique —
+     * rejects a duplicate with a clear 409 rather than a raw Prisma error.
+     */
+    if (input.email !== undefined) {
+      const normalised = input.email.trim().toLowerCase()
+      const clash = await this.prisma.user.findFirst({
+        where: { email: normalised, NOT: { id: existing.userId } },
+        select: { id: true },
+      })
+      if (clash) {
+        throw ApiError.conflict('That email is already in use', [
+          { field: 'email', message: 'Already linked to another account' },
+        ])
+      }
+      await this.prisma.user.update({
+        where: { id: existing.userId },
+        data: { email: normalised, emailVerifiedAt: null },
+      })
+    }
+
     return this.prisma.employee.update({
       where: { id },
       data: {
         ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
         ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
-        ...(input.email !== undefined ? { email: input.email } : {}),
+        ...(input.email !== undefined ? { email: input.email.trim().toLowerCase() } : {}),
         ...(input.photoUrl !== undefined ? { photoUrl: input.photoUrl } : {}),
         ...(input.dateOfBirth !== undefined ? { dateOfBirth: new Date(input.dateOfBirth) } : {}),
         ...(input.gender !== undefined ? { gender: input.gender } : {}),
