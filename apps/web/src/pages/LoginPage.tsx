@@ -126,7 +126,9 @@ export function LoginPage() {
             <Field label="Phone number" error={errors.phone?.message} required>
               <Input
                 {...register('phone')}
-                placeholder="9876543210"
+                // A hint, not a real-looking number — a "9876543210" placeholder
+                // is indistinguishable from a typed value on an empty field.
+                placeholder="Your 10-digit number"
                 autoComplete="username"
                 inputMode="numeric"
               />

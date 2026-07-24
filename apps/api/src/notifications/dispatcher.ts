@@ -148,7 +148,16 @@ export interface MailSender {
   }): Promise<unknown>
 }
 
-/** The reset email, in both the plain-text and HTML parts a client may show. */
+/**
+ * The reset email, in both the plain-text and HTML parts a client may show.
+ *
+ * Kept deliberately plain. Gmail sorts heavily-styled, image-and-colour-block
+ * mail into the Promotions tab; a password-reset code is transactional and
+ * belongs in Primary, so this reads like a short personal note — a couple of
+ * lines and the code, no banner, no colours, no links, minimal markup. The
+ * subject leads with the code, which is both what the recipient wants at a
+ * glance and a strong "this is a one-time transactional message" signal.
+ */
 function renderResetEmail(
   code: string,
   minutes: number
@@ -157,23 +166,30 @@ function renderResetEmail(
   text: string
   html: string
 } {
-  const subject = 'Your Bookends password reset code'
+  const subject = `${code} is your Bookends password reset code`
+  const expiry = `This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}.`
+
   const text = [
-    `Your password reset code is: ${code}`,
+    'Hi,',
     '',
-    `Enter it on the password reset screen to choose a new password. It expires in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    `Your Bookends password reset code is ${code}`,
+    '',
+    `Enter it on the reset screen to choose a new password. ${expiry}`,
     '',
     'If you did not request this, you can ignore this email — your password will not change.',
+    '',
+    'Bookends',
   ].join('\n')
 
+  // Intentionally minimal: default font, one bold line for the code, no
+  // container chrome or colour. Mirrors the text part so the two never diverge.
   const html = [
-    '<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:480px;margin:0 auto;color:#1b1b1f">',
-    '<p style="font-size:15px">Your password reset code is:</p>',
-    `<p style="font-size:30px;font-weight:700;letter-spacing:.3em;margin:16px 0">${code}</p>`,
-    `<p style="font-size:14px;color:#555">Enter it on the password reset screen to choose a new password. It expires in ${minutes} minute${minutes === 1 ? '' : 's'}.</p>`,
-    '<p style="font-size:13px;color:#888">If you did not request this, you can ignore this email — your password will not change.</p>',
-    '</div>',
-  ].join('')
+    '<p>Hi,</p>',
+    `<p>Your Bookends password reset code is <strong style="font-size:18px">${code}</strong></p>`,
+    `<p>Enter it on the reset screen to choose a new password. ${expiry}</p>`,
+    '<p>If you did not request this, you can ignore this email — your password will not change.</p>',
+    '<p>Bookends</p>',
+  ].join('\n')
 
   return { subject, text, html }
 }

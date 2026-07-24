@@ -177,7 +177,10 @@ function PhoneStep({ onSent }: { onSent: (phone: string) => void }) {
         <Field label="Phone number" error={errors.phone?.message} required>
           <Input
             {...register('phone')}
-            placeholder="9876543210"
+            // A hint, deliberately not a real-looking number. A placeholder of
+            // "9876543210" is indistinguishable from a typed value, so an empty
+            // field looked filled and its "required" error read as a bug.
+            placeholder="Your 10-digit number"
             autoComplete="username"
             inputMode="numeric"
           />
